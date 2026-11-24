@@ -1,6 +1,6 @@
-// ocr.js — Member 2: AI Screenshot OCR Scanner (Rapido / Uber / Ola)
+// ocr.js — Member 2: Multi-App AI Screenshot OCR Scanner (Rapido / Uber / Ola)
 async function handleOCRUpload(event) {
-  const file = event.target.files[0]; 
+  const file = event.target.files[0];
   if (!file) return;
 
   const preview = document.getElementById("ocrPreview");
@@ -17,39 +17,83 @@ async function handleOCRUpload(event) {
     const processedDataUrl = await preprocessImage(file);
     const { data: { text } } = await Tesseract.recognize(processedDataUrl, "eng");
 
-    const vehicleMatch = text.match(CONFIG.OCR_PATTERNS.vehicleNumber);
-    const driverMatch = text.match(CONFIG.OCR_PATTERNS.driverKeywords);
+    const cleanedText = text.replace(/[|]/g, "I");
+    const vehicleMatch = cleanedText.match(CONFIG.OCR_PATTERNS.vehicleNumber);
+    const formattedPlate = vehicleMatch ? formatIndianPlate(vehicleMatch[0]) : "";
+    const extractedDriver = extractDriverName(cleanedText, vehicleMatch ? vehicleMatch[0] : "");
 
-    if (vehicleMatch) {
-      document.getElementById("vehicleNumber").value = vehicleMatch[0].toUpperCase().replace(/\s+/g, "-");
+    if (formattedPlate) {
+      document.getElementById("vehicleNumber").value = formattedPlate;
     }
-    if (driverMatch) {
-      document.getElementById("driverName").value = driverMatch[1].trim();
+    if (extractedDriver) {
+      document.getElementById("driverName").value = extractedDriver;
     }
 
     scanLine.classList.add("hidden");
-    if (vehicleMatch || driverMatch) {
+    if (formattedPlate || extractedDriver) {
       statusEl.classList.add("success");
       statusEl.innerText = "✅ Extracted successfully";
+      if (typeof showToast === "function") {
+        showToast(`📷 OCR Locked: ${extractedDriver || "Driver"} (${formattedPlate || "Verify Plate"})`);
+      }
     } else {
       statusEl.innerText = "⚠️ Scan complete. Please verify fields above.";
     }
   } catch (err) {
     scanLine.classList.add("hidden");
     statusEl.innerText = "❌ OCR failed. Enter details manually.";
+  } finally {
+    URL.revokeObjectURL(imgUrl);
   }
+}
+
+function formatIndianPlate(rawPlate) {
+  const compact = rawPlate.toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const parts = compact.match(/^([A-Z]{2})(\d{1,2})([A-Z]{1,3})(\d{4})$/);
+  return parts ? `${parts[1]}-${parts[2]}-${parts[3]}-${parts[4]}` : rawPlate.toUpperCase().replace(/\s+/g, "-");
+}
+
+function extractDriverName(text, rawPlate) {
+  // 1. Direct keyword match (Rapido "Captain:", "Driver:", "Partner:", "Rider:")
+  const keywordMatch = text.match(CONFIG.OCR_PATTERNS.driverKeywords);
+  if (keywordMatch && keywordMatch[1]) {
+    return keywordMatch[1].replace(/[^A-Za-z.\s]/g, "").trim();
+  }
+
+  // 2. Fallback heuristic for Uber/Ola screenshots without explicit "Driver:" labels
+  const ignoredWords = /\b(rapido|uber|ola|auto|bike|cab|mini|prime|sedan|suv|otp|pin|pickup|drop|total|cash|upi|fare|ride|safety|share|call|message|coimbatore)\b/i;
+  const lines = text
+    .split(/\r?\n/)
+    .map(line => line.replace(/[0-9★☆•]+/g, " ").replace(/\s+/g, " ").trim())
+    .filter(line => line.length >= 3 && line.length <= 26);
+
+  const plateIdx = rawPlate
+    ? lines.findIndex(l => l.toUpperCase().includes(rawPlate.slice(-4).toUpperCase()))
+    : -1;
+
+  const searchOrder = plateIdx !== -1
+    ? [lines[plateIdx - 1], lines[plateIdx + 1], lines[plateIdx - 2], ...lines].filter(Boolean)
+    : lines;
+
+  for (const candidate of searchOrder) {
+    if (!ignoredWords.test(candidate) && /^[A-Z][a-z]+(?:\s+[A-Z][a-zA-Z.]+){0,2}$/.test(candidate)) {
+      return candidate;
+    }
+  }
+  return "";
 }
 
 function preprocessImage(file) {
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
+      const scale = img.width < 900 ? 2 : 1;
       const canvas = document.createElement("canvas");
       const ctx = canvas.getContext("2d");
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.filter = "grayscale(100%) contrast(155%)";
-      ctx.drawImage(img, 0, 0);
+      canvas.width = img.width * scale;
+      canvas.height = img.height * scale;
+      ctx.filter = "grayscale(100%) contrast(165%) brightness(105%)";
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       resolve(canvas.toDataURL("image/png"));
     };
     img.src = URL.createObjectURL(file);
@@ -98,5 +142,8 @@ function loadSampleRapidoBooking() {
     document.getElementById("vehicleNumber").value = "TN-38-AB-1234";
     statusEl.classList.add("success");
     statusEl.innerText = "✅ Extracted successfully";
+    if (typeof showToast === "function") {
+      showToast("📷 Sample voucher scanned: Ramesh K. (TN-38-AB-1234)");
+    }
   }, 1400);
 }
