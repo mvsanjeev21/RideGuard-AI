@@ -1,6 +1,6 @@
 // ocr.js — Member 2: AI Screenshot OCR Scanner (Rapido / Uber / Ola)
 async function handleOCRUpload(event) {
-  const file = event.target.files[0];
+  const file = event.target.files[0]; 
   if (!file) return;
 
   const preview = document.getElementById("ocrPreview");
