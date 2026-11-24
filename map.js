@@ -1,4 +1,4 @@
-// map.js — Member 1: Persistent Login, Dark Map, Live GPS, Heartbeat & SOS
+// map.js — Member 1: Persistent Login (4 fields), Dark Map, Live GPS, Heartbeat & Dual-Contact SOS
 let map, riderMarker, routeLine, watchId, heartbeatTimer, demoTimer, switchOffTimer;
 let isLiveGps = false;
 let demoStep = 0;
@@ -9,20 +9,32 @@ let lastSosMessage = "";
 window.onload = () => {
   initBattery();
   const saved = JSON.parse(localStorage.getItem("rideguard_profile"));
-  if (saved) showDashboard(saved);
+  if (saved && saved.contacts && saved.contacts.length === 2) {
+    showDashboard(saved);
+  }
 };
 
 function saveProfile() {
   const name = document.getElementById("userName").value.trim();
-  const contact = document.getElementById("emergencyPhone").value.trim();
-  if (!name || !contact) return showToast("Enter your name and emergency phone number.");
-  const profile = { name, contact };
+  const userPhone = document.getElementById("userPhone").value.trim();
+  const c1 = document.getElementById("emergencyPhone1").value.trim();
+  const c2 = document.getElementById("emergencyPhone2").value.trim();
+
+  if (!name || !userPhone || !c1 || !c2) {
+    return showToast("Please fill in your name, phone number, and both emergency contacts.");
+  }
+
+  const profile = { name, userPhone, contacts: [c1, c2] };
   localStorage.setItem("rideguard_profile", JSON.stringify(profile));
   showDashboard(profile);
 }
 
 function quickDemoLogin() {
-  const demo = { name: "Priya S.", contact: "+919876543210" };
+  const demo = {
+    name: "Priya S.",
+    userPhone: "+919000011111",
+    contacts: ["+919876543210", "+919123456789"]
+  };
   localStorage.setItem("rideguard_profile", JSON.stringify(demo));
   showDashboard(demo);
 }
@@ -35,7 +47,7 @@ function logoutProfile() {
 function showDashboard(profile) {
   document.getElementById("loginView").classList.add("hidden");
   document.getElementById("appView").classList.remove("hidden");
-  document.getElementById("welcomeUser").innerText = `Protected: ${profile.name}`;
+  document.getElementById("welcomeUser").innerText = `Protected: ${profile.name} (${profile.userPhone})`;
   setTimeout(initMap, 50);
 }
 
@@ -44,21 +56,17 @@ function initMap() {
 
   map = L.map("map", { zoomControl: true }).setView(CONFIG.DEFAULT_CENTER, 13);
 
-  // Dark-mode CartoDB Dark Matter map tiles
   L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
     attribution: "&copy; OpenStreetMap &copy; CARTO",
     maxZoom: 19
   }).addTo(map);
 
-  // Glowing cyan route corridor
   routeLine = L.polyline(CONFIG.DEMO_ROUTE, {
     color: "#22d3ee", weight: 4, opacity: 0.85
   }).addTo(map);
 
-  // Rider marker
   riderMarker = L.marker(CONFIG.DEFAULT_CENTER).addTo(map).bindPopup("<b>Rider Live Location</b>");
 
-  // Police Station glowing red radar markers
   CONFIG.POLICE_STATIONS.forEach(ps => {
     L.circle([ps.lat, ps.lng], {
       radius: 450, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.18, weight: 1.5
@@ -139,7 +147,8 @@ function sendHeartbeat() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       user: profile.name,
-      contact: profile.contact,
+      user_phone: profile.userPhone,
+      contacts: profile.contacts,
       lat: currentCoords.lat,
       lng: currentCoords.lng,
       battery: currentBattery,
@@ -158,7 +167,6 @@ function setHeartbeatUI(online) {
   dot.classList.toggle("offline", !online);
 }
 
-// Simulates forced phone power-off for Hackathon Demo (5s Dead-Man's Switch)
 function testSwitchOff() {
   clearInterval(heartbeatTimer);
   setHeartbeatUI(false);
@@ -182,7 +190,8 @@ function triggerManualSOS(reason) {
 
   lastSosMessage =
     `🚨 RIDEGUARD AI ALERT (${reason})\n` +
-    `User: ${profile.name} | Last Battery: ${currentBattery}%\n` +
+    `User: ${profile.name} (${profile.userPhone})\n` +
+    `Last Battery: ${currentBattery}%\n` +
     `Driver: ${driver} | Vehicle: ${vehicle}\n` +
     `Nearest Police: ${police.name}\n` +
     `Last Known GPS: ${mapsUrl}`;
@@ -197,15 +206,15 @@ function triggerManualSOS(reason) {
   }).catch(() => {});
 }
 
-function openWhatsAppFallback() {
+function openWhatsAppFallback(index) {
   const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  const phone = profile.contact.replace(/\D/g, "");
+  const phone = profile.contacts[index].replace(/\D/g, "");
   window.open(`https://wa.me/${phone}?text=${encodeURIComponent(lastSosMessage)}`, "_blank");
 }
 
-function openSmsFallback() {
+function openSmsFallback(index) {
   const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  window.open(`sms:${profile.contact}?body=${encodeURIComponent(lastSosMessage)}`, "_self");
+  window.open(`sms:${profile.contacts[index]}?body=${encodeURIComponent(lastSosMessage)}`, "_self");
 }
 
 function closeSosModal() {
