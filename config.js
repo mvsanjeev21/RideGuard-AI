@@ -1,6 +1,6 @@
 // config.js — Member 4: Central Dynamic Configuration
 const CONFIG = {
-  // Change to your deployed Render/Railway URL when live
+  // Update to your deployed Render/Railway backend URL when live
   API_BASE_URL: "http://127.0.0.1:5000",
 
   HEARTBEAT_INTERVAL_MS: 10000, // 10 seconds
