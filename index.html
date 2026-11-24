@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RideGuard AI</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 16px; }
+    .card { background: #1e293b; padding: 16px; border-radius: 12px; margin-bottom: 16px; }
+    input, button { width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none; box-sizing: border-box; }
+    input { background: #334155; color: white; }
+    button { background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
+    .btn-danger { background: #ef4444; }
+    .btn-success { background: #10b981; }
+    #map { height: 300px; border-radius: 12px; z-index: 1; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+  <!-- 1. One-Time Login View -->
+  <div id="loginView" class="card">
+    <h2>🛡️ RideGuard AI — Setup</h2>
+    <input id="userName" placeholder="Your Name" />
+    <input id="emergencyPhone" placeholder="Emergency WhatsApp/SMS (+91...)" />
+    <button onclick="saveProfile()">Save & Continue</button>
+  </div>
+
+  <!-- 2. Main Dashboard View -->
+  <div id="appView" class="hidden">
+    <div class="card">
+      <h3 id="welcomeText"></h3>
+      <label>Upload Rapido / Uber / Ola Screenshot:</label>
+      <input type="file" id="screenshotInput" accept="image/*" onchange="handleOCRUpload(event)" />
+      <p id="ocrStatus">Waiting for booking screenshot...</p>
+      <input id="driverName" placeholder="Driver Name (Auto-filled)" />
+      <input id="vehicleNumber" placeholder="Vehicle Number (Auto-filled)" />
+    </div>
+
+    <div class="card">
+      <div id="map"></div>
+      <button class="btn-success" onclick="startSafeRide()">Start Safe Ride (Live GPS)</button>
+      <button class="btn-danger" onclick="triggerManualSOS()">🚨 Instant SOS (WhatsApp + Server)</button>
+      <button onclick="endRideSafely()">End Ride & Purge Data</button>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script src="config.js"></script>
+  <script src="ocr.js"></script>
+  <script src="map.js"></script>
+</body>
+</html>
