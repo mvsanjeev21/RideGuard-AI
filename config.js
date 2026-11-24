@@ -67,3 +67,111 @@ const CONFIG = {
     driverKeywords: /(?:driver|captain|partner|rider)[:\s]+([A-Za-z.\s]{3,25})/i
   }
 };
+
+// Add a required location field with both manual coordinate entry and a GPS button.
+(() => {
+  const profileKey = "rideguard_profile_v4";
+  const demoLocation = [11.0168, 76.9674];
+
+  function parseCoordinates(value) {
+    const parts = String(value || "").split(/[\s,]+/).filter(Boolean);
+    if (parts.length !== 2) return null;
+    const lat = Number(parts[0]);
+    const lng = Number(parts[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return [lat, lng];
+  }
+
+  function addLocationField() {
+    const phone = document.getElementById("userPhone");
+    if (!phone || document.getElementById("userLocation")) return;
+
+    const formRow = phone.parentElement.parentElement;
+    formRow.insertAdjacentHTML("afterend", `
+      <div style="margin-top:12px">
+        <label for="userLocation">Location * (enter coordinates or use the location button)</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="userLocation" required aria-describedby="locationHelp" placeholder="Latitude, longitude (example: 11.0168, 76.9674)" style="flex:1;min-width:0" />
+          <button type="button" id="useLocationButton" class="icon-btn" aria-label="Use my current location" title="Use my current location" style="font-size:20px;padding:8px 12px">📍</button>
+        </div>
+        <div id="locationHelp" style="font-size:11px;color:var(--text-muted);margin-top:5px">Required. Type latitude and longitude, or tap 📍 and allow location access.</div>
+        <div id="locationStatus" role="status" aria-live="polite" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+      </div>`);
+
+    const input = document.getElementById("userLocation");
+    const status = document.getElementById("locationStatus");
+    const button = document.getElementById("useLocationButton");
+    try {
+      const saved = JSON.parse(localStorage.getItem(profileKey) || "null");
+      if (saved && Number.isFinite(saved.latitude) && Number.isFinite(saved.longitude)) {
+        input.value = `${saved.latitude}, ${saved.longitude}`;
+      }
+    } catch (error) {
+      // Ignore invalid stored profile data and let the user provide a location.
+    }
+
+    button.addEventListener("click", () => {
+      if (!navigator.geolocation) {
+        status.textContent = "Location is not supported by this browser. Enter coordinates manually.";
+        return;
+      }
+      button.disabled = true;
+      status.textContent = "Getting your location… Please allow location access if asked.";
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const { latitude, longitude } = position.coords;
+          input.value = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
+          status.textContent = "Location added. You can now save your profile.";
+          button.disabled = false;
+        },
+        (error) => {
+          const message = error.code === 1
+            ? "Location permission was denied. Allow it in your browser settings or enter coordinates manually."
+            : "Could not get your location. Try again or enter coordinates manually.";
+          status.textContent = message;
+          button.disabled = false;
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+      );
+    });
+
+    window.saveProfile = ((saveOriginal) => function () {
+      const coordinates = parseCoordinates(input.value);
+      if (!coordinates) {
+        status.textContent = "Enter valid latitude and longitude, or tap 📍 to use your current location.";
+        input.focus();
+        return;
+      }
+      CONFIG.DEFAULT_CENTER = coordinates;
+      return saveOriginal.apply(this, arguments);
+    })(window.saveProfile);
+
+    window.showDashboard = ((showOriginal) => function (profile) {
+      const coordinates = parseCoordinates(input.value) ||
+        (profile && parseCoordinates(`${profile.latitude}, ${profile.longitude}`));
+      if (!coordinates) {
+        status.textContent = "Location is required. Enter coordinates or tap 📍 before continuing.";
+        return;
+      }
+      profile.latitude = coordinates[0];
+      profile.longitude = coordinates[1];
+      CONFIG.DEFAULT_CENTER = coordinates;
+      try {
+        localStorage.setItem(profileKey, JSON.stringify(profile));
+      } catch (error) {
+        status.textContent = "Could not save your profile in this browser. Check storage settings and try again.";
+        return;
+      }
+      return showOriginal.apply(this, arguments);
+    })(window.showDashboard);
+
+    window.quickDemoLogin = ((demoOriginal) => function () {
+      if (!parseCoordinates(input.value)) {
+        input.value = `${demoLocation[0]}, ${demoLocation[1]}`;
+      }
+      return demoOriginal.apply(this, arguments);
+    })(window.quickDemoLogin);
+  }
+
+  document.addEventListener("DOMContentLoaded", addLocationField);
+})();
