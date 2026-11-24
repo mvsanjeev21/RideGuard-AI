@@ -1,13 +1,11 @@
 // config.js — Member 4: Central Dynamic Configuration
 const CONFIG = {
-  // Update to your deployed Render/Railway backend URL when live
+  // Change to your deployed Render/Railway URL when live
   API_BASE_URL: "http://127.0.0.1:5000",
 
-  // Heartbeat & Safety Timers
   HEARTBEAT_INTERVAL_MS: 10000, // 10 seconds
   DEFAULT_CENTER: [11.0168, 76.9674], // Coimbatore
 
-  // Demo Route Corridor (Saibaba Colony -> Gandhipuram -> Peelamedu)
   DEMO_ROUTE: [
     [11.0245, 76.9495],
     [11.0198, 76.9562],
@@ -16,7 +14,6 @@ const CONFIG = {
     [11.0283, 77.0028]
   ],
 
-  // Dynamic Police Station Database (Add any city/station here)
   POLICE_STATIONS: [
     { name: "Peelamedu Police Station", lat: 11.0283, lng: 77.0028, phone: "0422-2572344" },
     { name: "Gandhipuram Police Station", lat: 11.0176, lng: 76.9674, phone: "0422-2494333" },
@@ -24,7 +21,6 @@ const CONFIG = {
     { name: "Kinathukadavu Police Station", lat: 10.8214, lng: 77.0181, phone: "04259-242220" }
   ],
 
-  // Extensible Regex Patterns for Rapido, Uber, Ola, etc.
   OCR_PATTERNS: {
     vehicleNumber: /\b[A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,3}[\s-]?\d{4}\b/i,
     driverKeywords: /(?:driver|captain|partner|rider)[:\s]+([A-Za-z.\s]{3,25})/i
