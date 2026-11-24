@@ -1,4 +1,4 @@
-# server.py — Member 3: Dead-Man's Switch & Twilio Alert Engine
+# server.py — Member 3: Dead-Man's Switch & Dual-Contact Twilio Alert Engine
 # Install dependencies: pip install flask flask-cors twilio
 import os
 import time
@@ -10,11 +10,9 @@ from twilio.rest import Client
 app = Flask(__name__)
 CORS(app)
 
-# Volatile RAM store (zero permanent disk retention)
 active_rides = {}
 DEADMAN_TIMEOUT_SEC = 45
 
-# Set via environment variables before running
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"  # Twilio Sandbox number
@@ -23,20 +21,23 @@ def dispatch_twilio_alert(ride, reason):
     maps_url = f"https://maps.google.com/?q={ride['lat']},{ride['lng']}"
     message_body = (
         f"🚨 RIDEGUARD AI ALERT ({reason})\n"
-        f"User: {ride['user']} | Last Battery: {ride['battery']}%\n"
+        f"User: {ride['user']} ({ride.get('user_phone', 'N/A')})\n"
+        f"Last Battery: {ride['battery']}%\n"
         f"Driver: {ride['driver']} | Vehicle: {ride['vehicle']}\n"
         f"Nearest Police: {ride['nearest_police']}\n"
         f"Last Known GPS: {maps_url}"
     )
-    print("\n--- DISPATCHING EMERGENCY ALERT ---\n", message_body)
+    print("\n--- DISPATCHING DUAL-CONTACT EMERGENCY ALERT ---\n", message_body)
 
     if TWILIO_SID and TWILIO_TOKEN:
         client = Client(TWILIO_SID, TWILIO_TOKEN)
-        client.messages.create(
-            from_=TWILIO_WHATSAPP_FROM,
-            to=f"whatsapp:{ride['contact']}",
-            body=message_body
-        )
+        for contact in ride.get("contacts", []):
+            if contact:
+                client.messages.create(
+                    from_=TWILIO_WHATSAPP_FROM,
+                    to=f"whatsapp:{contact}",
+                    body=message_body
+                )
 
 def deadman_monitor():
     while True:
