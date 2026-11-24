@@ -1,4 +1,5 @@
-# server.py - Autonomous Dead-Man's Switch & Twilio Alert Engine
+# server.py — Member 3: Dead-Man's Switch & Twilio Alert Engine
+# Install dependencies: pip install flask flask-cors twilio
 import os
 import time
 import threading
@@ -9,11 +10,11 @@ from twilio.rest import Client
 app = Flask(__name__)
 CORS(app)
 
-# Store active rides in temporary RAM only (auto-deleted after ride for privacy)
+# Volatile RAM store (zero permanent disk retention)
 active_rides = {}
 DEADMAN_TIMEOUT_SEC = 45
 
-# Set these in your terminal/Render dashboard (never hardcode keys on GitHub)
+# Set via environment variables before running
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_WHATSAPP_FROM = "whatsapp:+14155238886"  # Twilio Sandbox number
@@ -37,14 +38,13 @@ def dispatch_twilio_alert(ride, reason):
             body=message_body
         )
 
-# Background thread checking for sudden phone switch-offs
 def deadman_monitor():
     while True:
         now = time.time()
         for user, ride in list(active_rides.items()):
             if not ride["alerted"] and (now - ride["last_ping"] > DEADMAN_TIMEOUT_SEC):
                 ride["alerted"] = True
-                dispatch_twilio_alert(ride, "PHONE SWITCHED OFF / LOST SIGNAL")
+                dispatch_twilio_alert(ride, "PHONE SWITCHED OFF / SIGNAL LOST")
         time.sleep(5)
 
 @app.route("/heartbeat", methods=["POST"])
@@ -64,7 +64,7 @@ def manual_sos():
 @app.route("/end-ride", methods=["POST"])
 def end_ride():
     user = request.json.get("user")
-    active_rides.pop(user, None)  # Privacy purge
+    active_rides.pop(user, None)  # Permanent RAM purge
     return jsonify({"status": "purged"}), 200
 
 if __name__ == "__main__":
