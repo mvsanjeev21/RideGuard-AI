@@ -21,21 +21,23 @@ def dispatch_twilio_alert(ride, reason):
     maps_url = f"https://maps.google.com/?q={ride['lat']},{ride['lng']}"
     message_body = (
         f"🚨 RIDEGUARD AI ALERT ({reason})\n"
-        f"User: {ride['user']} ({ride.get('user_phone', 'N/A')})\n"
+        f"Rider: {ride['user']} ({ride.get('user_phone', 'N/A')})\n"
+        f"Email: {ride.get('email', 'N/A')} | Base: {ride.get('base_location', 'N/A')}\n"
         f"Last Battery: {ride['battery']}%\n"
         f"Driver: {ride['driver']} | Vehicle: {ride['vehicle']}\n"
         f"Nearest Police: {ride['nearest_police']}\n"
         f"Last Known GPS: {maps_url}"
     )
-    print("\n--- DISPATCHING DUAL-CONTACT EMERGENCY ALERT ---\n", message_body)
+    print("\n--- DISPATCHING EMERGENCY ALERT ---\n", message_body)
 
     if TWILIO_SID and TWILIO_TOKEN:
         client = Client(TWILIO_SID, TWILIO_TOKEN)
         for contact in ride.get("contacts", []):
-            if contact:
+            phone = contact.get("phone") if isinstance(contact, dict) else contact
+            if phone:
                 client.messages.create(
                     from_=TWILIO_WHATSAPP_FROM,
-                    to=f"whatsapp:{contact}",
+                    to=f"whatsapp:{phone}",
                     body=message_body
                 )
 
