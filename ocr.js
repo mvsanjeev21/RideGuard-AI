@@ -7,7 +7,6 @@ async function handleOCRUpload(event) {
   const scanLine = document.getElementById("scanLine");
   const statusEl = document.getElementById("ocrStatus");
 
-  // Show uploaded image inside scanner box
   const imgUrl = URL.createObjectURL(file);
   preview.innerHTML = `<img src="${imgUrl}" alt="Ride Screenshot" />`;
   scanLine.classList.remove("hidden");
@@ -41,7 +40,6 @@ async function handleOCRUpload(event) {
   }
 }
 
-// High-contrast grayscale filter to improve dark-mode screenshot OCR accuracy
 function preprocessImage(file) {
   return new Promise((resolve) => {
     const img = new Image();
@@ -58,7 +56,6 @@ function preprocessImage(file) {
   });
 }
 
-// 1-Click Sample Rapido Booking Card for instant Hackathon Demo
 function loadSampleRapidoBooking() {
   const preview = document.getElementById("ocrPreview");
   const scanLine = document.getElementById("scanLine");
@@ -69,7 +66,6 @@ function loadSampleRapidoBooking() {
   canvas.height = 190;
   const ctx = canvas.getContext("2d");
 
-  // Draw mock Rapido voucher
   ctx.fillStyle = "#111827";
   ctx.fillRect(0, 0, 280, 190);
   ctx.fillStyle = "#facc15";
