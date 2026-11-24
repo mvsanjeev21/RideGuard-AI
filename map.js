@@ -1,4 +1,4 @@
-// map.js — Member 1: Persistent Login (4 fields), Dark Map, Live GPS, Heartbeat & Dual-Contact SOS
+// map.js — Member 1: Persistent Login, Auto-GPS Indexing, Dark Map, Heartbeat & Dual-Contact SOS
 let map, riderMarker, routeLine, watchId, heartbeatTimer, demoTimer, switchOffTimer;
 let isLiveGps = false;
 let demoStep = 0;
@@ -8,46 +8,91 @@ let lastSosMessage = "";
 
 window.onload = () => {
   initBattery();
-  const saved = JSON.parse(localStorage.getItem("rideguard_profile"));
-  if (saved && saved.contacts && saved.contacts.length === 2) {
+  const saved = JSON.parse(localStorage.getItem("rideguard_profile_v3"));
+  if (saved && saved.contacts && saved.contacts.length >= 1) {
     showDashboard(saved);
   }
 };
 
+function detectGpsLocation() {
+  const btn = document.getElementById("detectLocBtn");
+  btn.innerText = "Locating...";
+
+  const applyLocation = (lat, lng, label) => {
+    document.getElementById("userLocation").value = label;
+    const mapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
+    document.getElementById("gmapsLink").href = mapsUrl;
+    document.getElementById("gmapsIframe").src = `https://maps.google.com/maps?q=${lat},${lng}&z=15&output=embed`;
+    document.getElementById("gmapsPreviewBox").classList.remove("hidden");
+    btn.innerText = "🎯 Detect GPS";
+  };
+
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude.toFixed(5);
+        const lng = pos.coords.longitude.toFixed(5);
+        applyLocation(lat, lng, `GPS: ${lat}, ${lng}`);
+        showToast("📍 Live GPS location indexed via Google Maps.");
+      },
+      () => {
+        applyLocation(10.8808, 76.9936, "Othakalmandapam, Coimbatore, TN (10.8808, 76.9936)");
+        showToast("Using Coimbatore default location (enable GPS for live pin).");
+      },
+      { enableHighAccuracy: true, timeout: 7000 }
+    );
+  } else {
+    applyLocation(10.8808, 76.9936, "Othakalmandapam, Coimbatore, TN (10.8808, 76.9936)");
+  }
+}
+
 function saveProfile() {
   const name = document.getElementById("userName").value.trim();
+  const email = document.getElementById("userEmail").value.trim();
   const userPhone = document.getElementById("userPhone").value.trim();
-  const c1 = document.getElementById("emergencyPhone1").value.trim();
-  const c2 = document.getElementById("emergencyPhone2").value.trim();
+  const baseLocation = document.getElementById("userLocation").value.trim();
+  const emName1 = document.getElementById("emName1").value.trim();
+  const emPhone1 = document.getElementById("emPhone1").value.trim();
+  const emName2 = document.getElementById("emName2").value.trim();
+  const emPhone2 = document.getElementById("emPhone2").value.trim();
 
-  if (!name || !userPhone || !c1 || !c2) {
-    return showToast("Please fill in your name, phone number, and both emergency contacts.");
+  if (!name || !email || !userPhone || !baseLocation || !emName1 || !emPhone1) {
+    return showToast("Please fill in all required (*) fields.");
   }
 
-  const profile = { name, userPhone, contacts: [c1, c2] };
-  localStorage.setItem("rideguard_profile", JSON.stringify(profile));
+  const contacts = [{ name: emName1, phone: emPhone1 }];
+  if (emPhone2) contacts.push({ name: emName2 || "Secondary Contact", phone: emPhone2 });
+
+  const profile = { name, email, userPhone, baseLocation, contacts };
+  localStorage.setItem("rideguard_profile_v3", JSON.stringify(profile));
   showDashboard(profile);
 }
 
 function quickDemoLogin() {
   const demo = {
-    name: "Priya S.",
-    userPhone: "+919000011111",
-    contacts: ["+919876543210", "+919123456789"]
+    name: "Ananya Sharma",
+    email: "ananya@example.com",
+    userPhone: "+91 98765 43210",
+    baseLocation: "Othakalmandapam, Coimbatore, TN",
+    contacts: [
+      { name: "Parent", phone: "+919876500001" },
+      { name: "Friend", phone: "+919876500002" }
+    ]
   };
-  localStorage.setItem("rideguard_profile", JSON.stringify(demo));
+  localStorage.setItem("rideguard_profile_v3", JSON.stringify(demo));
   showDashboard(demo);
 }
 
 function logoutProfile() {
-  localStorage.removeItem("rideguard_profile");
+  localStorage.removeItem("rideguard_profile_v3");
   location.reload();
 }
 
 function showDashboard(profile) {
   document.getElementById("loginView").classList.add("hidden");
   document.getElementById("appView").classList.remove("hidden");
-  document.getElementById("welcomeUser").innerText = `Protected: ${profile.name} (${profile.userPhone})`;
+  document.getElementById("welcomeUser").innerText =
+    `Protected: ${profile.name} • ${profile.email} • ${profile.baseLocation}`;
   setTimeout(initMap, 50);
 }
 
@@ -94,160 +139,3 @@ function getNearestPolice(lat, lng) {
 }
 
 function startSafeRide() {
-  const badge = document.getElementById("sessionBadge");
-  badge.innerText = "🛡️ ACTIVE SAFE RIDE SESSION";
-  badge.classList.remove("danger");
-  setHeartbeatUI(true);
-
-  if (isLiveGps && navigator.geolocation) {
-    watchId = navigator.geolocation.watchPosition(
-      (pos) => updatePosition(pos.coords.latitude, pos.coords.longitude),
-      (err) => showToast("GPS Error: " + err.message),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-    );
-  } else {
-    clearInterval(demoTimer);
-    demoStep = 0;
-    demoTimer = setInterval(() => {
-      const pt = CONFIG.DEMO_ROUTE[demoStep % CONFIG.DEMO_ROUTE.length];
-      updatePosition(pt[0], pt[1]);
-      demoStep++;
-    }, 2500);
-  }
-
-  sendHeartbeat();
-  clearInterval(heartbeatTimer);
-  heartbeatTimer = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL_MS);
-  showToast("Safe Ride started. 10s Server Heartbeat active.");
-}
-
-function updatePosition(lat, lng) {
-  currentCoords = { lat, lng };
-  if (riderMarker) riderMarker.setLatLng([lat, lng]);
-  if (map) map.panTo([lat, lng]);
-  const police = getNearestPolice(lat, lng);
-  document.getElementById("policeText").innerText = `🚓 ${police.name.split(" ")[0]}`;
-}
-
-async function initBattery() {
-  if (navigator.getBattery) {
-    const bat = await navigator.getBattery();
-    currentBattery = Math.round(bat.level * 100);
-  }
-  document.getElementById("batteryText").innerText = `🔋 ${currentBattery}%`;
-}
-
-function sendHeartbeat() {
-  const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  if (!profile) return;
-  const police = getNearestPolice(currentCoords.lat, currentCoords.lng);
-
-  fetch(`${CONFIG.API_BASE_URL}/heartbeat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user: profile.name,
-      user_phone: profile.userPhone,
-      contacts: profile.contacts,
-      lat: currentCoords.lat,
-      lng: currentCoords.lng,
-      battery: currentBattery,
-      driver: document.getElementById("driverName").value || "Ramesh K.",
-      vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234",
-      nearest_police: police.name
-    })
-  }).catch(() => {});
-}
-
-function setHeartbeatUI(online) {
-  const status = document.getElementById("hbStatus");
-  const dot = document.getElementById("hbDot");
-  status.innerText = online ? "ONLINE" : "OFFLINE (SIGNAL LOST)";
-  status.classList.toggle("offline", !online);
-  dot.classList.toggle("offline", !online);
-}
-
-function testSwitchOff() {
-  clearInterval(heartbeatTimer);
-  setHeartbeatUI(false);
-  const badge = document.getElementById("sessionBadge");
-  badge.innerText = "⚠️ HEARTBEAT LOST — DEAD-MAN'S SWITCH (5s)";
-  badge.classList.add("danger");
-  showToast("Simulated phone switch-off! Auto-dispatching in 5s...");
-
-  clearTimeout(switchOffTimer);
-  switchOffTimer = setTimeout(() => {
-    triggerManualSOS("PHONE SWITCHED OFF / DEAD-MAN'S SWITCH");
-  }, 5000);
-}
-
-function triggerManualSOS(reason) {
-  const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  const police = getNearestPolice(currentCoords.lat, currentCoords.lng);
-  const driver = document.getElementById("driverName").value || "Ramesh K.";
-  const vehicle = document.getElementById("vehicleNumber").value || "TN-38-AB-1234";
-  const mapsUrl = `https://maps.google.com/?q=${currentCoords.lat.toFixed(5)},${currentCoords.lng.toFixed(5)}`;
-
-  lastSosMessage =
-    `🚨 RIDEGUARD AI ALERT (${reason})\n` +
-    `User: ${profile.name} (${profile.userPhone})\n` +
-    `Last Battery: ${currentBattery}%\n` +
-    `Driver: ${driver} | Vehicle: ${vehicle}\n` +
-    `Nearest Police: ${police.name}\n` +
-    `Last Known GPS: ${mapsUrl}`;
-
-  document.getElementById("sosPayload").innerText = lastSosMessage;
-  document.getElementById("sosModal").classList.remove("hidden");
-
-  fetch(`${CONFIG.API_BASE_URL}/sos`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user: profile.name })
-  }).catch(() => {});
-}
-
-function openWhatsAppFallback(index) {
-  const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  const phone = profile.contacts[index].replace(/\D/g, "");
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(lastSosMessage)}`, "_blank");
-}
-
-function openSmsFallback(index) {
-  const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  window.open(`sms:${profile.contacts[index]}?body=${encodeURIComponent(lastSosMessage)}`, "_self");
-}
-
-function closeSosModal() {
-  document.getElementById("sosModal").classList.add("hidden");
-}
-
-function endRideSafely() {
-  if (watchId) navigator.geolocation.clearWatch(watchId);
-  clearInterval(heartbeatTimer);
-  clearInterval(demoTimer);
-  clearTimeout(switchOffTimer);
-
-  const profile = JSON.parse(localStorage.getItem("rideguard_profile"));
-  fetch(`${CONFIG.API_BASE_URL}/end-ride`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user: profile.name })
-  }).catch(() => {});
-
-  document.getElementById("driverName").value = "";
-  document.getElementById("vehicleNumber").value = "";
-  document.getElementById("ocrStatus").innerText = "Waiting for booking screenshot...";
-  document.getElementById("ocrStatus").classList.remove("success");
-  document.getElementById("ocrPreview").innerHTML = "<strong>Upload Rapido / Uber / Ola Screenshot</strong><br/>Click to browse or tap <em>Load Sample</em>";
-  document.getElementById("sessionBadge").innerText = "🛡️ RIDE ENDED — ZERO DATA RETAINED";
-  document.getElementById("sessionBadge").classList.remove("danger");
-  setHeartbeatUI(true);
-  showToast("✅ Ride ended safely. Temporary GPS & OCR data purged.");
-}
-
-function showToast(msg) {
-  const t = document.getElementById("toast");
-  t.innerText = msg;
-  t.classList.remove("hidden");
-  setTimeout(() => t.classList.add("hidden"), 3500);
-}
