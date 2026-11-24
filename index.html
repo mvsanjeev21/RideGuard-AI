@@ -3,49 +3,276 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RideGuard AI</title>
+  <title>RideGuard AI — Autonomous Ride Safety</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <style>
-    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 16px; }
-    .card { background: #1e293b; padding: 16px; border-radius: 12px; margin-bottom: 16px; }
-    input, button { width: 100%; padding: 10px; margin-top: 8px; border-radius: 8px; border: none; box-sizing: border-box; }
-    input { background: #334155; color: white; }
-    button { background: #3b82f6; color: white; font-weight: bold; cursor: pointer; }
-    .btn-danger { background: #ef4444; }
-    .btn-success { background: #10b981; }
-    #map { height: 300px; border-radius: 12px; z-index: 1; }
-    .hidden { display: none; }
+    :root {
+      --bg-main: #0b1120;
+      --bg-card: #131c31;
+      --bg-input: #1e293b;
+      --border: rgba(148, 163, 184, 0.16);
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --blue: #3b82f6;
+      --cyan: #22d3ee;
+      --green: #10b981;
+      --red: #ef4444;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+    body { background: radial-gradient(circle at top right, #13223f, var(--bg-main) 60%); color: var(--text-main); min-height: 100vh; }
+    .hidden { display: none !important; }
+
+    /* Centered Login / Setup View */
+    .login-wrapper { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .login-card { width: 100%; max-width: 420px; background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: 0 24px 60px rgba(0,0,0,0.5); }
+    .brand { display: flex; align-items: center; gap: 10px; font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+    .brand span { color: var(--blue); }
+    .subtitle { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; }
+
+    label { display: block; font-size: 12px; color: var(--text-muted); margin: 12px 0 6px; font-weight: 500; }
+    input[type="text"], input[type="tel"] {
+      width: 100%; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
+      background: var(--bg-input); color: var(--text-main); font-size: 14px; outline: none;
+    }
+    input:focus { border-color: var(--blue); }
+
+    .btn {
+      width: 100%; padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-primary { background: var(--blue); color: #fff; border: none; margin-top: 16px; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); margin-top: 10px; }
+    .btn-ghost:hover { color: #fff; border-color: var(--blue); }
+
+    /* Main Dashboard Shell */
+    .dashboard { max-width: 1240px; margin: 0 auto; padding: 20px; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+    .top-left { display: flex; flex-direction: column; gap: 10px; }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 8px;
+      font-size: 12px; font-weight: 600; letter-spacing: 0.4px; width: fit-content;
+      background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+    .status-pill.danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.5); }
+    .top-actions { display: flex; align-items: center; gap: 10px; }
+    .icon-btn {
+      background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted);
+      padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px;
+    }
+    .icon-btn:hover { color: #fff; border-color: var(--blue); }
+
+    /* 2-Column Main Grid */
+    .main-grid { display: grid; grid-template-columns: 340px 1fr; gap: 18px; align-items: stretch; }
+    .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 18px; }
+
+    /* Left Column: OCR Scanner */
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+    .panel-title { font-size: 13px; font-weight: 700; letter-spacing: 0.6px; color: #e2e8f0; display: flex; align-items: center; gap: 8px; }
+    .mini-btn {
+      background: rgba(34, 211, 238, 0.12); color: var(--cyan); border: 1px solid rgba(34, 211, 238, 0.35);
+      padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer;
+    }
+    .ocr-box {
+      position: relative; height: 220px; border-radius: 12px; border: 1px dashed rgba(148, 163, 184, 0.35);
+      background: #0b1222; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      overflow: hidden; cursor: pointer; margin-bottom: 14px; text-align: center; padding: 12px;
+    }
+    .ocr-box img, .ocr-box canvas { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+    .ocr-placeholder { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+    .scan-line {
+      position: absolute; left: 0; right: 0; height: 3px; background: var(--cyan);
+      box-shadow: 0 0 16px 4px rgba(34, 211, 238, 0.8); animation: scan 1.6s linear infinite;
+    }
+    @keyframes scan { 0% { top: 5%; } 50% { top: 92%; } 100% { top: 5%; } }
+    .ocr-status { margin-top: 12px; font-size: 12px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+    .ocr-status.success { color: #34d399; font-weight: 500; }
+
+    /* Right Column: Map + Controls + Heartbeat */
+    .right-col { display: flex; flex-direction: column; gap: 16px; }
+    .map-wrapper { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--border); height: 370px; }
+    #map { width: 100%; height: 100%; z-index: 1; background: #0f172a; }
+    .map-mode-badge {
+      position: absolute; top: 12px; right: 12px; z-index: 400; background: rgba(11, 17, 32, 0.88);
+      border: 1px solid var(--border); color: #e2e8f0; padding: 6px 12px; border-radius: 8px;
+      font-size: 11px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px);
+    }
+
+    /* Bottom Deck: 3 Action Buttons + Heartbeat Card */
+    .bottom-deck { display: grid; grid-template-columns: 1fr 230px; gap: 16px; }
+    .controls-stack { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+
+    .btn-safe { background: rgba(16, 185, 129, 0.16); color: #ecfdf5; border: 1px solid rgba(16, 185, 129, 0.65); }
+    .btn-safe:hover { background: rgba(16, 185, 129, 0.28); }
+    .btn-sos { background: rgba(239, 68, 68, 0.18); color: #fef2f2; border: 1px solid rgba(239, 68, 68, 0.75); }
+    .btn-sos:hover { background: rgba(239, 68, 68, 0.32); }
+    .btn-purge { background: rgba(59, 130, 246, 0.16); color: #eff6ff; border: 1px solid rgba(59, 130, 246, 0.65); }
+    .btn-purge:hover { background: rgba(59, 130, 246, 0.28); }
+
+    /* Server Heartbeat Card */
+    .heartbeat-card {
+      background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 14px; display: flex; flex-direction: column; justify-content: space-between;
+    }
+    .hb-title { font-size: 11px; font-weight: 700; letter-spacing: 0.6px; color: #e2e8f0; }
+    .hb-status { font-size: 13px; font-weight: 700; color: #34d399; margin-top: 2px; }
+    .hb-status.offline { color: #f87171; }
+    .pulse-wrap { display: flex; justify-content: center; align-items: center; margin: 12px 0; }
+    .pulse-dot {
+      width: 14px; height: 14px; border-radius: 50%; background: var(--green);
+      box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); animation: pulse 1.8s infinite;
+    }
+    .pulse-dot.offline { background: var(--red); box-shadow: 0 0 12px var(--red); animation: none; }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+      70% { box-shadow: 0 0 0 14px rgba(16, 185, 129, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
+    .hb-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; margin-bottom: 8px; }
+    .btn-test-off {
+      width: 100%; background: rgba(239, 68, 68, 0.12); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.35);
+      padding: 6px; border-radius: 7px; font-size: 11px; font-weight: 600; cursor: pointer;
+    }
+
+    /* Emergency Modal (Isolated above Leaflet z-index) */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(2, 6, 23, 0.82); backdrop-filter: blur(6px);
+      z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
+    .modal-card {
+      width: 100%; max-width: 460px; background: var(--bg-card); border: 1px solid rgba(239, 68, 68, 0.6);
+      border-radius: 16px; padding: 24px; box-shadow: 0 24px 60px rgba(0,0,0,0.7);
+    }
+    .payload-box {
+      background: #090f1d; border: 1px solid var(--border); border-radius: 10px;
+      padding: 12px; font-family: monospace; font-size: 12px; color: #e2e8f0;
+      white-space: pre-wrap; margin: 14px 0; line-height: 1.5;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 20px; right: 20px; z-index: 10000; background: #1e293b;
+      border: 1px solid var(--blue); color: #fff; padding: 12px 18px; border-radius: 10px; font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .main-grid { grid-template-columns: 1fr; }
+      .bottom-deck { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
 
-  <!-- 1. One-Time Login View -->
-  <div id="loginView" class="card">
-    <h2>🛡️ RideGuard AI — Setup</h2>
-    <input id="userName" placeholder="Your Name" />
-    <input id="emergencyPhone" placeholder="Emergency WhatsApp/SMS (+91...)" />
-    <button onclick="saveProfile()">Save & Continue</button>
-  </div>
+  <!-- 1. ONE-TIME SETUP / LOGIN VIEW -->
+  <div id="loginView" class="login-wrapper">
+    <div class="login-card">
+      <div class="brand">🛡️ RideGuard <span>AI</span></div>
+      <p class="subtitle">One-time private setup. Stored locally on your device.</p>
 
-  <!-- 2. Main Dashboard View -->
-  <div id="appView" class="hidden">
-    <div class="card">
-      <h3 id="welcomeText"></h3>
-      <label>Upload Rapido / Uber / Ola Screenshot:</label>
-      <input type="file" id="screenshotInput" accept="image/*" onchange="handleOCRUpload(event)" />
-      <p id="ocrStatus">Waiting for booking screenshot...</p>
-      <input id="driverName" placeholder="Driver Name (Auto-filled)" />
-      <input id="vehicleNumber" placeholder="Vehicle Number (Auto-filled)" />
-    </div>
+      <label for="userName">Your Full Name</label>
+      <input type="text" id="userName" placeholder="e.g., Priya S." />
 
-    <div class="card">
-      <div id="map"></div>
-      <button class="btn-success" onclick="startSafeRide()">Start Safe Ride (Live GPS)</button>
-      <button class="btn-danger" onclick="triggerManualSOS()">🚨 Instant SOS (WhatsApp + Server)</button>
-      <button onclick="endRideSafely()">End Ride & Purge Data</button>
+      <label for="emergencyPhone">Emergency WhatsApp / SMS Number</label>
+      <input type="tel" id="emergencyPhone" placeholder="+91 98765 43210" />
+
+      <button class="btn btn-primary" onclick="saveProfile()">Save & Continue</button>
+      <button class="btn btn-ghost" onclick="quickDemoLogin()">⚡ Launch Demo Profile</button>
     </div>
   </div>
 
+  <!-- 2. MAIN DASHBOARD VIEW -->
+  <div id="appView" class="dashboard hidden">
+    <div class="topbar">
+      <div class="top-left">
+        <div class="brand">🛡️ RideGuard <span>AI</span></div>
+        <div id="sessionBadge" class="status-pill">🛡️ STANDBY — READY FOR SAFE RIDE</div>
+      </div>
+      <div class="top-actions">
+        <span id="welcomeUser" style="font-size:13px; color:var(--text-muted);"></span>
+        <button class="icon-btn" onclick="logoutProfile()">Switch Profile</button>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <!-- LEFT COLUMN: OCR SCANNER -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">📷 OCR SCANNER</div>
+          <button class="mini-btn" onclick="loadSampleRapidoBooking()">Load Sample</button>
+        </div>
+
+        <input type="file" id="screenshotInput" accept="image/*" class="hidden" onchange="handleOCRUpload(event)" />
+        <div class="ocr-box" onclick="document.getElementById('screenshotInput').click()">
+          <div id="ocrPreview" class="ocr-placeholder">
+            <strong>Upload Rapido / Uber / Ola Screenshot</strong><br />
+            Click to browse or tap <em>Load Sample</em>
+          </div>
+          <div id="scanLine" class="scan-line hidden"></div>
+        </div>
+
+        <label for="driverName">Driver</label>
+        <input type="text" id="driverName" placeholder="Auto-filled by AI OCR" />
+
+        <label for="vehicleNumber">Vehicle</label>
+        <input type="text" id="vehicleNumber" placeholder="e.g., TN-38-AB-1234" />
+
+        <div id="ocrStatus" class="ocr-status">Waiting for booking screenshot...</div>
+      </div>
+
+      <!-- RIGHT COLUMN: LIVE DARK MAP + CONTROLS + HEARTBEAT -->
+      <div class="right-col">
+        <div class="map-wrapper">
+          <div id="map"></div>
+          <button id="gpsModeBtn" class="map-mode-badge" onclick="toggleGpsMode()">Mode: Demo Route (Tap for Live GPS)</button>
+        </div>
+
+        <div class="bottom-deck">
+          <div class="controls-stack">
+            <button class="btn btn-safe" onclick="startSafeRide()">🛡️ START SAFE RIDE (Live GPS)</button>
+            <button class="btn btn-sos" onclick="triggerManualSOS('MANUAL SOS TRIGGERED')">🚨 INSTANT SOS (WhatsApp + Server)</button>
+            <button class="btn btn-purge" onclick="endRideSafely()">🗑️ END RIDE & PURGE DATA</button>
+          </div>
+
+          <div class="heartbeat-card">
+            <div>
+              <div class="hb-title">💓 SERVER HEARTBEAT:</div>
+              <div id="hbStatus" class="hb-status">ONLINE</div>
+            </div>
+            <div class="pulse-wrap">
+              <div id="hbDot" class="pulse-dot"></div>
+            </div>
+            <div>
+              <div class="hb-meta">
+                <span id="batteryText">🔋 --%</span>
+                <span id="policeText">🚓 Peelamedu</span>
+              </div>
+              <button class="btn-test-off" onclick="testSwitchOff()">⚡ Test Switch-Off (5s)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3. EMERGENCY SOS DISPATCH MODAL -->
+  <div id="sosModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h3 style="color:#f87171; margin-bottom:6px;">🚨 EMERGENCY ALERT DISPATCHED</h3>
+      <p style="font-size:12px; color:var(--text-muted);">Server payload triggered. Use 1-click fallback below if needed:</p>
+      <div id="sosPayload" class="payload-box"></div>
+      <div style="display:flex; gap:10px;">
+        <button class="btn btn-safe" onclick="openWhatsAppFallback()">💬 Send WhatsApp</button>
+        <button class="btn btn-purge" onclick="openSmsFallback()">📩 Send SMS</button>
+      </div>
+      <button class="btn btn-ghost" onclick="closeSosModal()">Dismiss Alert</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Libraries & Team Modules -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="config.js"></script>
