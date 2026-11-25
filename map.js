@@ -188,6 +188,16 @@ window.onload = () => {
   window.addEventListener("pagehide", dispatchLastGaspShutdownBeacon);
   window.addEventListener("beforeunload", dispatchLastGaspShutdownBeacon);
 
+  const handleViewportChange = () => {
+    if (map) {
+      setTimeout(() => {
+        map.invalidateSize();
+      }, 120);
+    }
+  };
+  window.addEventListener("resize", handleViewportChange);
+  window.addEventListener("orientationchange", handleViewportChange);
+
   const saved = loadEncryptedProfile();
   if (saved && Array.isArray(saved.coords) && saved.coords.length === 2) {
     sessionToken = generateSessionToken();
@@ -608,7 +618,6 @@ async function fetchOsrmRoadPolyline(startLat, startLng, endLat, endLng) {
     }
   } catch (e) {}
 
-  // Interpolated smooth fallback if OSRM is unreachable
   const steps = 16;
   const pts = [];
   for (let i = 0; i <= steps; i++) {
@@ -657,7 +666,6 @@ async function applyTripEndpointsFromScreenshot(pickupText, dropText) {
   const effectiveStartName = startGeo ? startGeo.place : currentAddress;
 
   if (!endGeo) {
-    // Only single location extracted
     await applyLocationFromScreenshot(effectiveStartName);
     return true;
   }
@@ -1060,16 +1068,13 @@ function initMap() {
 
   streetGroup.addTo(map);
 
-  // Full Start-to-End Trip Route Outline (High-visibility outer halo + inner dashed path)
   tripOutlineOuter = L.polyline([], { color: "#f59e0b", weight: 9, opacity: 0.45 }).addTo(map);
   tripOutlineInner = L.polyline([], { color: "#fbbf24", weight: 4.5, opacity: 0.95, dashArray: "10, 8" }).addTo(map);
 
-  // Police Station Vector & Live Completed Trail
   roadRouteOutline = L.polyline([], { color: "#1e3a8a", weight: 7, opacity: 0.45 }).addTo(map);
   roadRouteLine = L.polyline([], { color: "#3b82f6", weight: 3.5, opacity: 0.85 }).addTo(map);
   liveTrailLine = L.polyline([], { color: "#06b6d4", weight: 5.5, opacity: 0.98 }).addTo(map);
 
-  // Directional Arrow Marker showing live heading & movement
   riderMarker = L.marker([startLat, startLng], {
     draggable: true,
     icon: createDirectionalArrowIcon(0, false),
@@ -1383,7 +1388,6 @@ function startSafeRide() {
   } else {
     clearInterval(demoTimer);
 
-    // Move along the full Start-to-End trip outline if mapped, else along police road route
     let activePath =
       tripRouteCoords && tripRouteCoords.length >= 2
         ? tripRouteCoords
@@ -1396,7 +1400,6 @@ function startSafeRide() {
               [currentCoords.lat + 0.0138, currentCoords.lng + 0.0124]
             ];
 
-    // Subsample dense OSRM polylines to ~24 smooth animation steps so progress from Start to End is clearly visible
     if (activePath.length > 28) {
       const sampled = [];
       const step = (activePath.length - 1) / 24;
