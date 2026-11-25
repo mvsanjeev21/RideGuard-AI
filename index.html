@@ -1,108 +1,1461 @@
 <!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
   <meta charset="UTF-8" />
+
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RideGuard AI — Global Road-Routed Safety &amp; Police Radar</title>
+
+  <title>RideGuard AI — Coimbatore District Safety &amp; Police Radar</title>
+
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
   <style>
+
     :root {
+
       --bg-main: #0b1120;
+
       --bg-card: #131c31;
+
       --bg-input: #0f172a;
+
       --border: rgba(148, 163, 184, 0.18);
+
       --text-main: #f8fafc;
+
       --text-muted: #94a3b8;
+
       --blue: #3b82f6;
+
       --cyan: #22d3ee;
+
       --green: #10b981;
+
       --emerald: #34d399;
+
       --amber: #f59e0b;
+
       --red: #ef4444;
+
       --purple: #a855f7;
+
     }
+
+
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
+
     body { background: radial-gradient(circle at top right, #13223f, var(--bg-main) 60%); color: var(--text-main); min-height: 100vh; overflow-x: hidden; }
+
     .hidden { display: none !important; }
 
+
+
     /* =================================================================== */
+
     /* 1. LOGIN / SETUP VIEW                                               */
+
     /* =================================================================== */
+
     .login-wrapper {
+
       min-height: 100vh; display: flex; align-items: center; justify-content: center;
+
       padding: 24px 16px; background: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.22), #070c16 68%);
+
     }
+
     .login-card {
+
       width: 100%; max-width: 560px; background: rgba(17, 25, 44, 0.94); backdrop-filter: blur(18px);
+
       border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 20px; padding: 28px 30px;
+
       box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
+
     }
+
     .login-header { text-align: center; margin-bottom: 18px; }
+
     .login-header h2 { font-size: 26px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; }
+
     .login-header h2 span { color: var(--blue); }
+
     .login-header p { font-size: 13px; color: #cbd5e1; margin-top: 6px; }
 
+
+
     .compute-banner {
+
       display: flex; align-items: flex-start; gap: 12px; background: rgba(37, 99, 235, 0.14);
+
       border: 1px solid rgba(59, 130, 246, 0.4); border-radius: 12px; padding: 12px 14px; margin-bottom: 18px;
+
     }
+
     .compute-banner .b-icon { font-size: 18px; margin-top: 1px; }
+
     .compute-banner .b-title { font-size: 13px; font-weight: 700; color: #60a5fa; margin-bottom: 3px; }
+
     .compute-banner .b-desc { font-size: 12px; color: #cbd5e1; line-height: 1.45; }
 
+
+
     .sec-title { font-size: 13px; font-weight: 700; color: #f1f5f9; display: flex; align-items: center; gap: 7px; margin: 14px 0 8px; }
+
     .sec-title.green { color: var(--emerald); margin-top: 18px; }
+
     .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 
+
+
     label { display: block; font-size: 12px; color: #cbd5e1; margin: 10px 0 5px; font-weight: 500; }
+
     input[type="text"], input[type="tel"], input[type="email"] {
+
       width: 100%; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
+
       background: var(--bg-input); color: var(--text-main); font-size: 13px; outline: none;
+
     }
+
     input:focus { border-color: var(--blue); }
 
+
+
     .loc-input-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
     .loc-input-row input { flex: 1; min-width: 180px; }
+
     .loc-refresh-btn {
+
       background: rgba(34, 211, 238, 0.12); border: 1px solid rgba(34, 211, 238, 0.4);
+
       color: var(--cyan); padding: 10px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;
+
       cursor: pointer; white-space: nowrap; transition: 0.2s;
+
     }
+
     .loc-refresh-btn:hover { background: rgba(34, 211, 238, 0.22); color: #fff; }
+
     .loc-auto-status { font-size: 11px; color: #38bdf8; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
+
     .loc-auto-status.ok { color: #34d399; }
+
     .loc-auto-status.warn { color: #fbbf24; }
 
+
+
     .btn {
+
       width: 100%; padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 600;
+
       cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
+
     }
+
     .btn-save-grad { background: linear-gradient(90deg, #0ea5e9, #2563eb); color: #fff; border: none; margin-top: 18px; padding: 13px; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35); }
+
     .btn-save-grad:hover { opacity: 0.94; }
+
     .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); margin-top: 10px; }
+
     .btn-ghost:hover { color: #fff; border-color: var(--blue); }
 
+
+
     /* =================================================================== */
+
     /* 2. MAIN DASHBOARD SHELL                                             */
+
     /* =================================================================== */
+
     .brand { display: flex; align-items: center; gap: 10px; font-size: 24px; font-weight: 700; margin-bottom: 6px; }
+
     .brand span { color: var(--blue); }
+
     .dashboard { max-width: 1320px; margin: 0 auto; padding: 20px; }
+
     .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
+
     .top-left { display: flex; flex-direction: column; gap: 8px; }
+
     .status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
     .status-pill {
+
       display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 8px;
+
       font-size: 12px; font-weight: 600; letter-spacing: 0.4px; width: fit-content;
+
       background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);
+
     }
+
     .status-pill.danger { background: rgba(239, 68, 68, 0.18); color: #f87171; border-color: rgba(239, 68, 68, 0.65); }
+
     .vault-pill {
+
       display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 8px;
+
       font-size: 11px; font-weight: 600; background: rgba(168, 85, 247, 0.14); color: #d8b4fe;
+
       border: 1px solid rgba(168, 85, 247, 0.35);
+
     }
+
     .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .icon-btn { background: var(--bg-card); border: 1px solid var(--border); color: var(--text
+
+    .icon-btn { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; transition: 0.2s; }
+
+    .icon-btn:hover { color: #fff; border-color: var(--blue); }
+
+
+
+    .main-grid { display: grid; grid-template-columns: 355px 1fr; gap: 18px; align-items: stretch; }
+
+    .left-col { display: flex; flex-direction: column; gap: 16px; }
+
+    .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 18px; }
+
+
+
+    /* =================================================================== */
+
+    /* 3. LEFT COLUMN: AI OCR SCANNER + ANALYTICS                          */
+
+    /* =================================================================== */
+
+    .panel-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 8px; }
+
+    .panel-title { font-size: 13px; font-weight: 700; letter-spacing: 0.6px; color: #e2e8f0; display: flex; align-items: center; gap: 7px; }
+
+    .btn-group-mini { display: flex; gap: 6px; }
+
+    .mini-btn { background: rgba(34, 211, 238, 0.12); color: var(--cyan); border: 1px solid rgba(34, 211, 238, 0.35); padding: 5px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; }
+
+    .mini-btn:hover { background: rgba(34, 211, 238, 0.22); }
+
+    .mini-btn.warn { background: rgba(245, 158, 11, 0.14); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
+
+
+
+    .quality-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px; color: var(--text-muted); }
+
+    .q-badge { padding: 2px 8px; border-radius: 6px; font-weight: 700; font-size: 10px; background: rgba(148, 163, 184, 0.16); color: #cbd5e1; }
+
+    .q-badge.good { background: rgba(16, 185, 129, 0.18); color: #34d399; }
+
+    .q-badge.low { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+
+
+
+    .ocr-box {
+
+      position: relative; height: 195px; border-radius: 12px; border: 1px dashed rgba(148, 163, 184, 0.35);
+
+      background: #0b1222; display: flex; flex-direction: column; align-items: center; justify-content: center;
+
+      overflow: hidden; cursor: pointer; margin-bottom: 12px; text-align: center; padding: 10px;
+
+    }
+
+    .ocr-box img, .ocr-box canvas { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
+
+    .ocr-placeholder { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+
+    .scan-line { position: absolute; left: 0; right: 0; height: 3px; background: var(--cyan); box-shadow: 0 0 16px 4px rgba(34, 211, 238, 0.8); animation: scan 1.6s linear infinite; }
+
+    @keyframes scan { 0% { top: 5%; } 50% { top: 92%; } 100% { top: 5%; } }
+
+
+
+    .mismatch-banner {
+
+      margin-top: 10px; padding: 10px 12px; border-radius: 10px;
+
+      background: rgba(239, 68, 68, 0.16); border: 1px solid rgba(239, 68, 68, 0.65);
+
+      color: #fecaca; font-size: 11.5px; line-height: 1.4;
+
+    }
+
+    .mismatch-banner strong { color: #f87171; display: block; margin-bottom: 2px; }
+
+    .mismatch-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+    .mismatch-actions button { flex: 1; padding: 6px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; cursor: pointer; border: none; }
+
+    .btn-sos-mini { background: var(--red); color: #fff; }
+
+    .btn-fix-mini { background: rgba(255, 255, 255, 0.14); color: #fff; }
+
+
+
+    .ocr-status { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+
+    .ocr-status.success { color: #34d399; font-weight: 500; }
+
+
+
+    .risk-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+
+    .risk-score-num { font-size: 22px; font-weight: 800; color: #34d399; }
+
+    .risk-score-num.mod { color: #fbbf24; }
+
+    .risk-score-num.high { color: #f87171; }
+
+    .risk-pill { padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.18); color: #34d399; }
+
+    .risk-pill.mod { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    .risk-pill.high { background: rgba(239, 68, 68, 0.22); color: #f87171; }
+
+    .risk-meter-bg { width: 100%; height: 7px; border-radius: 999px; background: #090f1d; overflow: hidden; margin-bottom: 10px; }
+
+    .risk-meter-fill { height: 100%; width: 96%; background: linear-gradient(90deg, #10b981, #22d3ee); transition: width 0.35s ease; }
+
+    .risk-list { list-style: none; display: flex; flex-direction: column; gap: 5px; font-size: 11.5px; color: #cbd5e1; }
+
+    .risk-list li { display: flex; align-items: center; gap: 6px; }
+
+    .risk-list li.warn-item { color: #fca5a5; font-weight: 500; }
+
+
+
+    /* =================================================================== */
+
+    /* 4. RIGHT COLUMN: MAP + ROAD ROUTE CARD + COIMBATORE POLICE COVERAGE */
+
+    /* =================================================================== */
+
+    .right-col { display: flex; flex-direction: column; gap: 16px; }
+
+    .map-wrapper { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--border); height: 425px; }
+
+    #map { width: 100%; height: 100%; z-index: 1; background: #e2e8f0; }
+
+
+
+    .map-toolbar {
+
+      position: absolute; top: 10px; right: 10px; z-index: 400; display: flex; flex-wrap: wrap;
+
+      justify-content: flex-end; gap: 6px; max-width: 88%;
+
+    }
+
+    .map-chip {
+
+      background: rgba(11, 17, 32, 0.9); border: 1px solid var(--border); color: #e2e8f0;
+
+      padding: 6px 10px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px);
+
+    }
+
+    .map-chip:hover { border-color: var(--cyan); color: #fff; }
+
+    .map-chip.active { border-color: var(--cyan); color: var(--cyan); background: rgba(11, 17, 32, 0.95); }
+
+
+
+    .road-route-card {
+
+      position: absolute; top: 52px; left: 12px; z-index: 400; width: 295px;
+
+      background: rgba(11, 17, 32, 0.92); backdrop-filter: blur(10px);
+
+      border: 1px solid rgba(59, 130, 246, 0.55); border-radius: 12px; padding: 10px 12px;
+
+      font-size: 11px; color: #f8fafc; box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+
+    }
+
+    .rr-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+
+    .rr-badge { background: rgba(37, 99, 235, 0.25); color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.45); padding: 2px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; }
+
+    .rr-main { display: flex; align-items: baseline; gap: 8px; margin: 4px 0; }
+
+    .rr-km { font-size: 18px; font-weight: 800; color: #38bdf8; }
+
+    .rr-time { font-size: 13px; font-weight: 700; color: #34d399; }
+
+    .rr-sub { font-size: 10.5px; color: #cbd5e1; line-height: 1.35; }
+
+    .rr-compare { font-size: 10px; color: #94a3b8; margin-top: 4px; padding-top: 4px; border-top: 1px solid rgba(148, 163, 184, 0.16); }
+
+
+
+    .gps-hud {
+
+      position: absolute; bottom: 12px; left: 12px; z-index: 400; width: 295px;
+
+      background: rgba(11, 17, 32, 0.9); backdrop-filter: blur(10px);
+
+      border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 12px; padding: 10px 12px;
+
+      font-size: 11px; color: #e2e8f0; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+
+    }
+
+    .hud-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+
+    .sig-badge { padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+    .sig-badge.fair { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    .sig-badge.weak { background: rgba(239, 68, 68, 0.2); color: #f87171; }
+
+    .hud-addr { color: #93c5fd; font-weight: 600; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    .hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; color: var(--text-muted); }
+
+    .hud-grid strong { color: #f8fafc; }
+
+    .hud-link { color: #38bdf8; text-decoration: none; font-weight: 600; font-size: 10px; }
+
+    .hud-link:hover { text-decoration: underline; }
+
+
+
+    .journey-drawer {
+
+      position: absolute; bottom: 12px; right: 12px; z-index: 400; width: 280px; max-height: 225px;
+
+      background: rgba(11, 17, 32, 0.93); backdrop-filter: blur(10px);
+
+      border: 1px solid rgba(34, 211, 238, 0.4); border-radius: 12px; padding: 10px 12px;
+
+      display: flex; flex-direction: column; gap: 6px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5);
+
+    }
+
+    .jd-head { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 700; color: var(--cyan); }
+
+    .jd-list { overflow-y: auto; max-height: 165px; display: flex; flex-direction: column; gap: 5px; font-size: 10.5px; color: #cbd5e1; }
+
+    .jd-list div { background: rgba(15, 23, 42, 0.9); padding: 5px 7px; border-radius: 6px; border-left: 2px solid var(--cyan); }
+
+
+
+    .offroute-banner {
+
+      position: absolute; top: 52px; left: 50%; transform: translateX(-50%); z-index: 450;
+
+      width: 92%; max-width: 470px; background: rgba(127, 29, 29, 0.96); border: 1px solid var(--red);
+
+      border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.65);
+
+    }
+
+    .offroute-banner.amber { background: rgba(120, 53, 15, 0.96); border-color: var(--amber); }
+
+    .offroute-banner button { background: var(--green); color: #052e16; border: none; padding: 8px 13px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+
+
+
+    /* =================================================================== */
+
+    /* 5. COIMBATORE DISTRICT POLICE COVERAGE PANEL (DISPLAY-ONLY INFO)    */
+
+    /* =================================================================== */
+
+    .police-coverage-panel {
+
+      background: linear-gradient(135deg, rgba(19, 28, 49, 0.98), rgba(15, 23, 42, 0.98));
+
+      border: 1px solid rgba(56, 189, 248, 0.35);
+
+      border-radius: 16px;
+
+      padding: 15px 18px;
+
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+
+    }
+
+    .police-coverage-panel.station-switched {
+
+      border-color: var(--cyan);
+
+      box-shadow: 0 0 22px rgba(34, 211, 238, 0.25);
+
+    }
+
+    .pc-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+
+    .pc-title { font-size: 12px; font-weight: 800; letter-spacing: 0.7px; color: #38bdf8; display: flex; align-items: center; gap: 7px; }
+
+    .pc-badges-wrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+    .pc-radar-badge {
+
+      display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+
+      font-size: 10.5px; font-weight: 700; background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);
+
+    }
+
+    .pc-display-only-badge {
+
+      display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 999px;
+
+      font-size: 10.5px; font-weight: 700; background: rgba(148, 163, 184, 0.14); color: #cbd5e1; border: 1px solid rgba(148, 163, 184, 0.35);
+
+    }
+
+    .pc-radar-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: pulse 1.6s infinite; }
+
+
+
+    .pc-search-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+
+    .pc-search-row input { flex: 1; min-width: 220px; padding: 9px 12px; font-size: 12px; border-radius: 8px; }
+
+    .pc-search-btn {
+
+      background: rgba(56, 189, 248, 0.16); border: 1px solid rgba(56, 189, 248, 0.45);
+
+      color: #38bdf8; padding: 9px 14px; border-radius: 8px; font-size: 11.5px; font-weight: 700;
+
+      cursor: pointer; white-space: nowrap; transition: 0.2s;
+
+    }
+
+    .pc-search-btn:hover { background: rgba(56, 189, 248, 0.28); color: #fff; }
+
+
+
+    .pc-active-grid { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; }
+
+    .pc-station-name { font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 3px; }
+
+    .pc-zone { font-size: 12px; color: var(--text-muted); margin-bottom: 8px; }
+
+    .pc-metrics { display: flex; flex-wrap: wrap; gap: 8px; }
+
+    .pc-chip { background: rgba(15, 23, 42, 0.88); border: 1px solid var(--border); padding: 4px 10px; border-radius: 7px; font-size: 11.5px; color: #e2e8f0; }
+
+    .pc-chip strong { color: var(--cyan); }
+
+    .pc-chip.road strong { color: #34d399; }
+
+
+
+    .pc-readonly-box {
+
+      display: flex; flex-direction: column; align-items: flex-end; justify-content: center;
+
+      background: rgba(15, 23, 42, 0.92); border: 1px solid rgba(56, 189, 248, 0.35);
+
+      border-radius: 12px; padding: 10px 16px; min-width: 215px; user-select: text;
+
+    }
+
+    .pc-phone-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px; color: #94a3b8; }
+
+    .pc-phone-num { font-size: 16px; font-weight: 800; font-family: monospace; color: #f8fafc; margin: 3px 0; }
+
+    .pc-readonly-note { font-size: 10.5px; color: #38bdf8; font-weight: 600; }
+
+
+
+    .pc-summary-bar {
+
+      margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(148, 163, 184, 0.14);
+
+      display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+
+      font-size: 11px; color: var(--text-muted);
+
+    }
+
+    .pc-nearby-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+
+    .pc-mini-card {
+
+      background: rgba(11, 18, 34, 0.78); border: 1px solid var(--border); border-radius: 9px;
+
+      padding: 8px 10px; font-size: 11px; cursor: pointer; transition: 0.2s;
+
+    }
+
+    .pc-mini-card:hover { border-color: var(--cyan); background: rgba(15, 23, 42, 0.95); }
+
+    .pc-mini-card.nearest { border-color: rgba(16, 185, 129, 0.55); background: rgba(16, 185, 129, 0.08); }
+
+    .pc-mini-name { font-weight: 700; color: #f1f5f9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+
+    .pc-mini-meta { display: flex; justify-content: space-between; align-items: center; color: var(--text-muted); font-size: 10.5px; gap: 4px; }
+
+    .pc-mini-tel { color: #93c5fd; font-family: monospace; font-weight: 600; }
+
+
+
+    /* =================================================================== */
+
+    /* 6. BOTTOM DECK: CONTROLS + SUDDEN PHONE SHUTDOWN VAULT CARD         */
+
+    /* =================================================================== */
+
+    .bottom-deck { display: grid; grid-template-columns: 1fr 290px; gap: 16px; }
+
+    .controls-stack { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
+
+    .btn-safe { background: rgba(16, 185, 129, 0.16); color: #ecfdf5; border: 1px solid rgba(16, 185, 129, 0.65); }
+
+    .btn-safe:hover { background: rgba(16, 185, 129, 0.28); }
+
+    .btn-sos { background: rgba(239, 68, 68, 0.18); color: #fef2f2; border: 1px solid rgba(239, 68, 68, 0.75); }
+
+    .btn-sos:hover { background: rgba(239, 68, 68, 0.32); }
+
+    .btn-purge { background: rgba(59, 130, 246, 0.16); color: #eff6ff; border: 1px solid rgba(59, 130, 246, 0.65); }
+
+    .btn-purge:hover { background: rgba(59, 130, 246, 0.28); }
+
+
+
+    .heartbeat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
+
+    .hb-row { display: flex; justify-content: space-between; align-items: center; }
+
+    .hb-title { font-size: 10.5px; font-weight: 700; letter-spacing: 0.5px; color: var(--text-muted); }
+
+    .hb-status { font-size: 12.5px; font-weight: 700; color: #34d399; }
+
+    .hb-status.offline { color: #f87171; }
+
+    .hb-status.amber { color: #fbbf24; }
+
+    .pulse-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }
+
+    .pulse-dot.offline { background: var(--red); box-shadow: 0 0 12px var(--red); animation: none; }
+
+    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 12px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
+
+
+
+    .vault-sync-box {
+
+      background: rgba(15, 23, 42, 0.9); border: 1px solid rgba(56, 189, 248, 0.3);
+
+      border-radius: 8px; padding: 7px 9px; font-size: 10.5px; line-height: 1.35;
+
+    }
+
+    .vault-sync-box.frozen { border-color: rgba(239, 68, 68, 0.75); background: rgba(127, 29, 29, 0.32); }
+
+    .vault-sync-head { display: flex; justify-content: space-between; font-weight: 700; color: #38bdf8; margin-bottom: 2px; }
+
+    .vault-sync-box.frozen .vault-sync-head { color: #fca5a5; }
+
+    .vault-sync-coords { color: #e2e8f0; font-family: monospace; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+
+
+    .hb-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; gap: 6px; }
+
+    .hb-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+    .btn-test-off { width: 100%; background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.4); padding: 6px; border-radius: 7px; font-size: 10.5px; font-weight: 600; cursor: pointer; }
+
+    .btn-test-net { width: 100%; background: rgba(245, 158, 11, 0.12); color: #fde68a; border: 1px solid rgba(245, 158, 11, 0.35); padding: 6px; border-radius: 7px; font-size: 10.5px; font-weight: 600; cursor: pointer; }
+
+
+
+    /* =================================================================== */
+
+    /* 7. MODALS & TOASTS                                                  */
+
+    /* =================================================================== */
+
+    .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.84); backdrop-filter: blur(6px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px; }
+
+    .modal-card { width: 100%; max-width: 520px; background: var(--bg-card); border: 1px solid rgba(239, 68, 68, 0.6); border-radius: 16px; padding: 24px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75); max-height: 92vh; overflow-y: auto; }
+
+    .modal-card.report { border-color: rgba(56, 189, 248, 0.55); }
+
+    .payload-box { background: #090f1d; border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-family: monospace; font-size: 11.5px; color: #e2e8f0; white-space: pre-wrap; margin: 12px 0; line-height: 1.5; }
+
+    .delivery-list { display: flex; flex-direction: column; gap: 7px; margin: 10px 0 12px; }
+
+    .delivery-item { display: flex; justify-content: space-between; align-items: center; background: #0b1222; border: 1px solid var(--border); padding: 8px 11px; border-radius: 8px; font-size: 12px; }
+
+    .deliv-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px; }
+
+    .deliv-badge.sending { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
+
+    .deliv-badge.retry { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+
+    .deliv-badge.ok { background: rgba(16, 185, 129, 0.2); color: #34d399; }
+
+    .deliv-badge.queued { background: rgba(168, 85, 247, 0.2); color: #d8b4fe; }
+
+    .dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
+
+
+
+    .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
+
+    .rep-stat { background: #0b1222; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+
+    .rep-stat span { display: block; font-size: 11px; color: var(--text-muted); }
+
+    .rep-stat strong { font-size: 16px; color: #f8fafc; }
+
+
+
+    .toast { position: fixed; bottom: 20px; right: 20px; z-index: 10000; background: #1e293b; border: 1px solid var(--blue); color: #fff; padding: 12px 18px; border-radius: 10px; font-size: 13px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); max-width: 90vw; }
+
+
+
+    @media (max-width: 960px) {
+
+      .main-grid, .bottom-deck { grid-template-columns: 1fr; }
+
+      .pc-active-grid { grid-template-columns: 1fr; }
+
+      .pc-readonly-box { align-items: flex-start; }
+
+      .pc-nearby-grid { grid-template-columns: 1fr 1fr; }
+
+    }
+
+    @media (max-width: 560px) {
+
+      .grid-2, .pc-nearby-grid { grid-template-columns: 1fr; }
+
+      .gps-hud, .road-route-card { width: calc(100% - 24px); }
+
+    }
+
+  </style>
+
+</head>
+
+<body>
+
+
+
+  <!-- ===================================================================== -->
+
+  <!-- 1. LOGIN / SETUP VIEW                                                 -->
+
+  <!-- ===================================================================== -->
+
+  <div id="loginView" class="login-wrapper">
+
+    <div class="login-card">
+
+      <div class="login-header">
+
+        <h2>🛡️ RideGuard <span>AI</span></h2>
+
+        <p>Coimbatore District Women's Ride Safety &amp; Police Coverage Radar (v1.0)</p>
+
+      </div>
+
+
+
+      <div class="compute-banner">
+
+        <div class="b-icon">🛡️</div>
+
+        <div>
+
+          <div class="b-title">Coimbatore District 19-Station Radar &amp; AI OCR</div>
+
+          <div class="b-desc">
+
+            No fixed location is assumed—enter or auto-detect your exact starting place below. Police station information covers <strong>Coimbatore District only</strong> (display-only info; alerts go solely to personal contacts).
+
+          </div>
+
+        </div>
+
+      </div>
+
+
+
+      <div class="sec-title">👤 Rider Identity &amp; Starting Point</div>
+
+      <label for="userName">Full Name *</label>
+
+      <input type="text" id="userName" placeholder="e.g., Ananya Sharma" />
+
+
+
+      <div class="grid-2">
+
+        <div>
+
+          <label for="userEmail">Email Address *</label>
+
+          <input type="email" id="userEmail" placeholder="ananya@example.com" />
+
+        </div>
+
+        <div>
+
+          <label for="userPhone">Mobile Number *</label>
+
+          <input type="tel" id="userPhone" placeholder="+91 98765 43210" />
+
+        </div>
+
+      </div>
+
+
+
+      <label for="userLocation">Starting Location * (Required — Auto-GPS or Type Any Place)</label>
+
+      <div class="loc-input-row">
+
+        <input type="text" id="userLocation" required placeholder="Enter area, campus, or street address..." oninput="this.dataset.userEdited='1'" />
+
+        <button type="button" class="loc-refresh-btn" title="Allow Browser GPS Permission &amp; Detect Exact Satellite Location" onclick="autoDetectLoginLocation(true)">📍 Allow &amp; Detect GPS</button>
+
+      </div>
+
+      <div id="locationAutoStatus" class="loc-auto-status">🛰️ Click "Allow &amp; Detect GPS" or allow the browser location prompt...</div>
+
+
+
+      <div class="sec-title green">📞 Trusted Personal Emergency Contacts (Sole Alert Recipients)</div>
+
+      <label>Primary Emergency Contact (WhatsApp / Phone) *</label>
+
+      <div class="grid-2">
+
+        <input type="text" id="emName1" placeholder="Parent / Partner Name" />
+
+        <input type="tel" id="emPhone1" placeholder="+91 98765 00001" />
+
+      </div>
+
+
+
+      <label>Secondary Emergency Contact (Optional)</label>
+
+      <div class="grid-2">
+
+        <input type="text" id="emName2" placeholder="Friend / Relative" />
+
+        <input type="tel" id="emPhone2" placeholder="+91 98765 00002" />
+
+      </div>
+
+
+
+      <button class="btn btn-save-grad" onclick="saveProfile()">🔒 Save Profile &amp; Open Safety Map</button>
+
+      <button id="quickDemoBtn" class="btn btn-ghost" onclick="quickDemoLogin()">⚡ Quick Fill Demo Profile (Uses Your Location)</button>
+
+    </div>
+
+  </div>
+
+
+
+  <!-- ===================================================================== -->
+
+  <!-- 2. MAIN DASHBOARD VIEW                                                -->
+
+  <!-- ===================================================================== -->
+
+  <div id="appView" class="dashboard hidden">
+
+    <div class="topbar">
+
+      <div class="top-left">
+
+        <div class="brand">🛡️ RideGuard <span>AI</span></div>
+
+        <div class="status-row">
+
+          <div id="sessionBadge" class="status-pill">🛡️ STANDBY — READY FOR SAFE RIDE</div>
+
+          <div id="vaultBadge" class="vault-pill">🔐 AES-256 Encrypted Vault</div>
+
+        </div>
+
+      </div>
+
+      <div class="top-actions">
+
+        <span id="welcomeUser" style="font-size:12px; color:var(--text-muted);"></span>
+
+        <button class="icon-btn" onclick="openSafetyReport(false)">📊 Safety Report</button>
+
+        <button class="icon-btn" onclick="logoutProfile()">Switch Profile</button>
+
+      </div>
+
+    </div>
+
+
+
+    <div class="main-grid">
+
+      <!-- LEFT COLUMN: AI OCR VERIFICATION + SAFETY ANALYTICS -->
+
+      <div class="left-col">
+
+        <div class="panel">
+
+          <div class="panel-header">
+
+            <div class="panel-title">📷 AI RIDE VERIFICATION</div>
+
+            <div class="btn-group-mini">
+
+              <button class="mini-btn" onclick="loadSampleRapidoBooking()">Load Sample</button>
+
+              <button class="mini-btn warn" onclick="simulatePlateMismatch()">Test Mismatch</button>
+
+            </div>
+
+          </div>
+
+
+
+          <div class="quality-row">
+
+            <span>Image Clarity Check:</span>
+
+            <span id="imageQualityBadge" class="q-badge">Awaiting Scan</span>
+
+          </div>
+
+
+
+          <input type="file" id="screenshotInput" accept="image/*" class="hidden" onchange="handleOCRUpload(event)" />
+
+          <div class="ocr-box" onclick="document.getElementById('screenshotInput').click()">
+
+            <div id="ocrPreview" class="ocr-placeholder">
+
+              <strong>Upload Rapido / Uber / Ola Screenshot</strong><br />
+
+              Click to browse or tap <em>Load Sample</em>
+
+            </div>
+
+            <div id="scanLine" class="scan-line hidden"></div>
+
+          </div>
+
+
+
+          <label for="driverName">Driver / Captain</label>
+
+          <input type="text" id="driverName" placeholder="Auto-filled if present in screenshot" oninput="evaluateRiskAnalytics()" />
+
+
+
+          <label for="vehicleNumber">Vehicle Registration</label>
+
+          <input type="text" id="vehicleNumber" placeholder="e.g., TN-38-AB-1234" oninput="checkVehicleMismatch()" />
+
+
+
+          <div id="ocrLocationBadge" class="quality-row hidden" style="margin-top:8px; background:rgba(56,189,248,0.12); border:1px solid rgba(56,189,248,0.35); padding:6px 9px; border-radius:8px; color:#bae6fd;">
+
+            <span>📍 Image Location:</span>
+
+            <strong id="ocrExtractedLocationText" style="color:#38bdf8; max-width:190px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">--</strong>
+
+          </div>
+
+
+
+          <div id="mismatchBanner" class="mismatch-banner hidden">
+
+            <strong>⚠️ VEHICLE MISMATCH DETECTED!</strong>
+
+            <span id="mismatchText">Active plate differs from booked screenshot!</span>
+
+            <div class="mismatch-actions">
+
+              <button class="btn-sos-mini" onclick="triggerManualSOS('VEHICLE PLATE MISMATCH')">🚨 Alert Trusted Contacts</button>
+
+              <button class="btn-fix-mini" onclick="document.getElementById('mismatchBanner').classList.add('hidden')">Ignore</button>
+
+            </div>
+
+          </div>
+
+
+
+          <div id="ocrStatus" class="ocr-status">Waiting for booking screenshot...</div>
+
+        </div>
+
+
+
+        <div class="panel">
+
+          <div class="panel-header">
+
+            <div class="panel-title">🧠 AI SAFETY ANALYTICS</div>
+
+            <span id="riskLevelBadge" class="risk-pill">LOW RISK</span>
+
+          </div>
+
+          <div class="risk-header">
+
+            <span style="font-size:12px; color:var(--text-muted);">Live Journey Safety Score</span>
+
+            <span id="riskScoreValue" class="risk-score-num">96 / 100</span>
+
+          </div>
+
+          <div class="risk-meter-bg">
+
+            <div id="riskMeterFill" class="risk-meter-fill"></div>
+
+          </div>
+
+          <ul id="riskIndicators" class="risk-list">
+
+            <li>✅ Road Corridor &amp; GPS Telemetry Nominal</li>
+
+            <li>✅ Coimbatore District Police Info Active</li>
+
+          </ul>
+
+        </div>
+
+      </div>
+
+
+
+      <!-- RIGHT COLUMN: GOOGLE MAPS ROAD-ROUTED MAP + COIMBATORE DISTRICT POLICE COVERAGE -->
+
+      <div class="right-col">
+
+        <div class="map-wrapper">
+
+          <div id="map"></div>
+
+
+
+          <div class="map-toolbar">
+
+            <button id="gpsModeBtn" class="map-chip active" onclick="toggleGpsMode()">📍 Mode: Demo</button>
+
+            <button class="map-chip" onclick="pinpointMyLocation()">🎯 Pinpoint Me</button>
+
+            <button id="layerBtn" class="map-chip" onclick="toggleMapLayer()">🗺️ Street Map</button>
+
+            <button id="followBtn" class="map-chip active" onclick="toggleAutoFollow()">🎯 Follow: ON</button>
+
+            <button id="vectorBtn" class="map-chip active" onclick="togglePoliceVector()">🛣️ Road Path</button>
+
+            <button id="offRouteBtn" class="map-chip" onclick="simulateOffRoute()">⚠️ Off-Route</button>
+
+            <button id="stopBtn" class="map-chip" onclick="simulateUnusualStop()">⏸️ Stop</button>
+
+            <button id="historyBtn" class="map-chip" onclick="toggleJourneyDrawer()">📜 Log</button>
+
+            <button class="map-chip" onclick="shareLiveLocation()">📤 Share</button>
+
+          </div>
+
+
+
+          <div class="road-route-card">
+
+            <div class="rr-top">
+
+              <span class="rr-badge">🛣️ GOOGLE MAPS ROAD ROUTE</span>
+
+              <span id="rrSourceTag" style="font-size:10px; color:#34d399; font-weight:700;">LIVE ROAD</span>
+
+            </div>
+
+            <div class="rr-main">
+
+              <span id="rrRoadKm" class="rr-km">-- km</span>
+
+              <span id="rrRoadMins" class="rr-time">-- min drive</span>
+
+            </div>
+
+            <div id="rrSummary" class="rr-sub">Calculating road route to nearest Coimbatore District police station...</div>
+
+            <div id="rrCompare" class="rr-compare">Straight-line air displacement: -- km • Road route: -- km</div>
+
+          </div>
+
+
+
+          <div id="safetyCheckBanner" class="offroute-banner hidden">
+
+            <div style="font-size:12px; line-height:1.4;">
+
+              <strong id="checkBannerTitle">⚠️ ROUTE DEVIATION DETECTED!</strong><br />
+
+              <span id="checkBannerSub">Auto-SOS to trusted contacts in</span> <span id="checkCountdown">10</span>s. Are you safe?
+
+            </div>
+
+            <button onclick="confirmSafe()">I'm Safe</button>
+
+          </div>
+
+
+
+          <div class="gps-hud">
+
+            <div class="hud-top">
+
+              <strong>🛰️ LIVE GPS TELEMETRY</strong>
+
+              <span id="hudSignal" class="sig-badge">STANDBY</span>
+
+            </div>
+
+            <div id="hudAddress" class="hud-addr">Awaiting location...</div>
+
+            <div class="hud-grid">
+
+              <span>Speed: <strong id="hudSpeed">0 km/h</strong></span>
+
+              <span>Heading: <strong id="hudHeading">N (0°)</strong></span>
+
+              <span>Trip Dist: <strong id="hudDist">0.00 km</strong></span>
+
+              <span><a id="hudGmapsLink" class="hud-link" href="https://maps.google.com" target="_blank" rel="noopener">Verify in Google Maps ↗</a></span>
+
+            </div>
+
+            <div style="margin-top:4px; font-size:10px; color:var(--text-muted);">
+
+              Exact Pin: <strong id="hudCoords" style="color:#e2e8f0;">-- , --</strong>
+
+            </div>
+
+          </div>
+
+
+
+          <div id="journeyDrawer" class="journey-drawer hidden">
+
+            <div class="jd-head">
+
+              <span>📜 LIVE JOURNEY LOG</span>
+
+              <span id="journeyCount">0 pts</span>
+
+            </div>
+
+            <div id="journeyEntries" class="jd-list">
+
+              <div>Start Safe Ride to record timestamped road waypoints...</div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+
+
+        <!-- STRICTLY DISPLAY-ONLY COIMBATORE DISTRICT POLICE STATION INFO PANEL -->
+
+        <div id="policeCoveragePanel" class="police-coverage-panel">
+
+          <div class="pc-header">
+
+            <div class="pc-title">🚓 COIMBATORE DISTRICT POLICE STATION INFO (19 STATIONS • v1.0)</div>
+
+            <div class="pc-badges-wrap">
+
+              <div class="pc-radar-badge">
+
+                <span class="pc-radar-dot"></span>
+
+                <span id="pcRadarStatusText">Coimbatore District Only (19 Stations)</span>
+
+              </div>
+
+              <div class="pc-display-only-badge">
+
+                <span>👁️ Info Only • No Messages Sent to Police</span>
+
+              </div>
+
+            </div>
+
+          </div>
+
+
+
+          <div class="pc-search-row">
+
+            <input type="text" id="jumpLocationInput" placeholder="Search Coimbatore District place (e.g., KPRIET Arasur, Gandhipuram, Peelamedu, Sulur, Pollachi)..." onkeydown="if(event.key==='Enter') searchAndJumpLocation()" />
+
+            <button type="button" class="pc-search-btn" onclick="searchAndJumpLocation()">🔍 Move &amp; Scan Police</button>
+
+          </div>
+
+
+
+          <div class="pc-active-grid">
+
+            <div>
+
+              <div id="activePsName" class="pc-station-name">Scanning Nearest Coimbatore District Police Station...</div>
+
+              <div id="activePsZone" class="pc-zone">Jurisdiction: Updating from your location</div>
+
+              <div class="pc-metrics">
+
+                <span class="pc-chip road">🛣️ Road Distance: <strong id="activePsDist">-- km</strong></span>
+
+                <span class="pc-chip">✈️ Air Displacement: <strong id="activePsAirDist">-- km</strong></span>
+
+                <span class="pc-chip">⏱️ Drive ETA: <strong id="activePsEta">-- mins</strong></span>
+
+              </div>
+
+            </div>
+
+
+
+            <div class="pc-readonly-box">
+
+              <div class="pc-phone-label">Control Room Number (Info Only)</div>
+
+              <div id="activePsPhone" class="pc-phone-num">--</div>
+
+              <div class="pc-readonly-note">🔒 Display Only • Coimbatore District</div>
+
+            </div>
+
+          </div>
+
+
+
+          <div class="pc-summary-bar">
+
+            <span>v1.0 Info: Coimbatore District Police Stations Only (19 Stations) • Other districts coming in v2.0</span>
+
+            <span style="color:#38bdf8;">💡 Drag blue pin, click on map, or tap any Coimbatore station below</span>
+
+          </div>
+
+
+
+          <div id="nearbyStationsGrid" class="pc-nearby-grid"></div>
+
+        </div>
+
+
+
+        <!-- BOTTOM ACTION CONTROLS & SUDDEN PHONE SHUTDOWN VAULT -->
+
+        <div class="bottom-deck">
+
+          <div class="controls-stack">
+
+            <button class="btn btn-safe" onclick="startSafeRide()">🛡️ START SAFE RIDE (Live Road Tracking)</button>
+
+            <button class="btn btn-sos" onclick="triggerManualSOS('MANUAL SOS TRIGGERED')">🚨 INSTANT SOS (Trusted Contacts Only)</button>
+
+            <button class="btn btn-purge" onclick="endRideSafely()">🗑️ END RIDE &amp; PURGE DATA</button>
+
+          </div>
+
+
+
+          <div class="heartbeat-card">
+
+            <div class="hb-row">
+
+              <div>
+
+                <div class="hb-title">💓 DEAD-MAN'S SWITCH:</div>
+
+                <div id="hbStatus" class="hb-status">ONLINE • SYNCING</div>
+
+              </div>
+
+              <div id="hbDot" class="pulse-dot"></div>
+
+            </div>
+
+
+
+            <div id="vaultSyncBox" class="vault-sync-box">
+
+              <div class="vault-sync-head">
+
+                <span id="vaultSyncTitle">☁️ LAST-KNOWN FINAL PIN</span>
+
+                <span id="vaultSyncTime">READY</span>
+
+              </div>
+
+              <div id="vaultSyncCoords" class="vault-sync-coords">Awaiting active location...</div>
+
+            </div>
+
+
+
+            <div class="hb-row">
+
+              <div>
+
+                <div class="hb-title">📶 NETWORK &amp; OUTBOX:</div>
+
+                <div id="netStatus" class="hb-status">ONLINE</div>
+
+              </div>
+
+              <span id="queueText" style="font-size:11px; color:var(--text-muted);">📦 Queue: 0</span>
+
+            </div>
+
+
+
+            <div class="hb-meta">
+
+              <span id="batteryText">🔋 88%</span>
+
+              <span id="policeText">🚓 Scanning...</span>
+
+            </div>
+
+
+
+            <div class="hb-btn-row">
+
+              <button class="btn-test-off" onclick="testSwitchOff()">📵 Phone Shutdown (5s)</button>
+
+              <button id="offlineSimBtn" class="btn-test-net" onclick="toggleOfflineSimulation()">📴 Test Offline</button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      </div>
+
+    </div>
+
+  </div>
+
+
+
+  <!-- ===================================================================== -->
+
+  <!-- 3. TRUSTED-CONTACTS-ONLY EMERGENCY SOS MODAL                          -->
+
+  <!-- ===================================================================== -->
+
+  <div id="sosModal" class="modal-overlay hidden">
+
+    <div class="modal-card">
+
+      <h3 style="color:#f87171; margin-bottom:4px;">🚨 EMERGENCY ALERT DISPATCHED TO TRUSTED CONTACTS</h3>
+
+      <p style="font-size:12px; color:var(--text-muted);">
+
+        Sent exclusively to your personal emergency contacts with exact final location &amp; Coimbatore District police info (zero messages sent to police):
+
+      </p>
+
+      <div id="deliveryTracker" class="delivery-list"></div>
+
+      <div id="sosPayload" class="payload-box"></div>
+
+      <div id="dispatchButtons" class="dispatch-grid"></div>
+
+      <button class="btn btn-ghost" onclick="closeSosModal()">Dismiss Alert</button>
+
+    </div>
+
+  </div>
+
+
+
+  <!-- ===================================================================== -->
+
+  <!-- 4. POST-RIDE SAFETY AUDIT REPORT MODAL                                -->
+
+  <!-- ===================================================================== -->
+
+  <div id="reportModal" class="modal-overlay hidden">
+
+    <div class="modal-card report">
+
+      <h3 style="color:#38bdf8; margin-bottom:4px;">📊 RIDE SAFETY AUDIT REPORT</h3>
+
+      <p id="reportSubtitle" style="font-size:12px; color:var(--text-muted);">
+
+        Real-time road telemetry &amp; AI risk pattern summary
+
+      </p>
+
+      <div class="report-grid">
+
+        <div class="rep-stat"><span>Trip Road Distance</span><strong id="repDist">0.00 km</strong></div>
+
+        <div class="rep-stat"><span>Active Duration</span><strong id="repDur">00:00</strong></div>
+
+        <div class="rep-stat"><span>Avg / Max Speed</span><strong id="repSpeed">0 / 0 km/h</strong></div>
+
+        <div class="rep-stat"><span>Final Safety Score</span><strong id="repScore" style="color:#34d399;">96 / 100</strong></div>
+
+      </div>
+
+      <div id="reportTextBox" class="payload-box"></div>
+
+      <button class="btn btn-purge" onclick="copySafetyReport()">📋 Copy Safety Report</button>
+
+      <button class="btn btn-ghost" onclick="closeReportModal()">Close Report</button>
+
+    </div>
+
+  </div>
+
+
+
+  <div id="toast" class="toast hidden"></div>
+
+
+
+  <!-- External Mapping & AI OCR Libraries -->
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+
+
+  <!-- Modular Team Scripts (Load Order: config.js -> ocr.js -> map.js) -->
+
+  <script src="config.js"></script>
+
+  <script src="ocr.js"></script>
+
+  <script src="map.js"></script>
+
+</body>
+
+</html>
