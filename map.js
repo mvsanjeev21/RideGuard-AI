@@ -216,8 +216,8 @@ function samplePreciseHardwareGps(onProgress, quickMode = false) {
       return reject({ code: 0, message: "Geolocation API unsupported" });
     }
 
-    const maxWaitMs = quickMode ? 3200 : (CONFIG.GPS_LOCK_MAX_WAIT_MS || 6000);
-    const targetMeters = quickMode ? 60 : (CONFIG.GPS_LOCK_TARGET_METERS || 25);
+    const maxWaitMs = quickMode ? 4500 : (CONFIG.GPS_LOCK_MAX_WAIT_MS || 8000);
+    const targetMeters = quickMode ? 35 : (CONFIG.GPS_LOCK_TARGET_METERS || 15);
     let bestPos = null;
     let lastError = null;
     let settled = false;
@@ -243,7 +243,7 @@ function samplePreciseHardwareGps(onProgress, quickMode = false) {
           if (onProgress) onProgress(`🛰️ Refining satellite lock... best accuracy ±${acc}m`, acc);
         }
         const elapsed = Date.now() - startedAt;
-        if (bestPos.coords.accuracy <= targetMeters && (quickMode || elapsed >= 800 || bestPos.coords.accuracy <= 20)) {
+        if (bestPos.coords.accuracy <= targetMeters && (elapsed >= 900 || bestPos.coords.accuracy <= 15)) {
           finish();
         }
       },
@@ -252,7 +252,7 @@ function samplePreciseHardwareGps(onProgress, quickMode = false) {
         const policyBlocked = /permissions policy|disabled in this document/i.test(err?.message || "");
         if (policyBlocked || err?.code === 1) finish(err);
       },
-      { enableHighAccuracy: true, maximumAge: quickMode ? 30000 : 0, timeout: maxWaitMs }
+      { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs }
     );
   });
 }
@@ -275,7 +275,7 @@ async function acquireBestLocation(onStatus, quickMode = false) {
       permissionState === "prompt"
         ? "🛰️ Please tap 'Allow' on the browser location popup for exact GPS..."
         : quickMode
-          ? "🛰️ Checking fast GPS fix..."
+          ? "🛰️ Locking high-accuracy hardware GPS..."
           : "🛰️ Acquiring high-accuracy satellite GPS fix..."
     );
   }
@@ -287,8 +287,8 @@ async function acquireBestLocation(onStatus, quickMode = false) {
     const accuracy = Math.round(pos.coords.accuracy || 9999);
     const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
     const heading = pos.coords.heading || 0;
-    const rejectLimit = CONFIG.GPS_COARSE_REJECT_METERS || 1200;
-    const trustedLimit = CONFIG.GPS_MAX_TRUSTED_ACCURACY_METERS || 300;
+    const rejectLimit = CONFIG.GPS_COARSE_REJECT_METERS || 800;
+    const trustedLimit = CONFIG.GPS_MAX_TRUSTED_ACCURACY_METERS || 150;
 
     let source = "gps";
     if (accuracy > rejectLimit) source = "coarse_rejected";
@@ -316,7 +316,7 @@ async function autoDetectLoginLocation(manualTrigger = false) {
   statusEl.className = "loc-auto-status";
   const result = await acquireBestLocation((msg) => {
     statusEl.innerText = msg;
-  }, !manualTrigger);
+  }, false);
 
   if (result.source === "failed") {
     statusEl.className = "loc-auto-status warn";
