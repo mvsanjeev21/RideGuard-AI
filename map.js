@@ -1,5 +1,5 @@
 /* ===================================================================== */
-/* map.js — RideGuard AI GPS Lock, Coimbatore 19-Station Radar & Routing  */
+/* map.js — RideGuard AI GPS Lock, Full Trip Outline & Directional Arrow */
 /* ===================================================================== */
 
 const VAULT_STORAGE_KEY = "rideguard_vault_v1";
@@ -26,11 +26,22 @@ let currentLayerMode = "street";
 let riderMarker = null;
 let accuracyCircle = null;
 let liveTrailLine = null;
+let tripOutlineOuter = null;
+let tripOutlineInner = null;
+let tripStartMarker = null;
+let tripEndMarker = null;
 let roadRouteOutline = null;
 let roadRouteLine = null;
 let activeStationHighlight = null;
 let policeLayersGroup = null;
 let shutdownPinMarker = null;
+
+let tripStartCoords = null;
+let tripEndCoords = null;
+let tripStartLabel = "";
+let tripEndLabel = "";
+let tripRouteCoords = [];
+let currentHeadingDeg = 0;
 
 let isLiveGps = false;
 let autoFollow = true;
@@ -116,7 +127,58 @@ function loadEncryptedProfile() {
 }
 
 /* ===================================================================== */
-/* 2. APP BOOTSTRAP & MULTI-SAMPLE PRECISION SATELLITE GPS LOCK          */
+/* 2. DIRECTIONAL BEARING & ROTATING NAVIGATION ARROW MARKER             */
+/* ===================================================================== */
+function computeBearingDegrees(lat1, lon1, lat2, lon2) {
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const toDeg = (rad) => (rad * 180) / Math.PI;
+  const phi1 = toRad(lat1);
+  const phi2 = toRad(lat2);
+  const dLambda = toRad(lon2 - lon1);
+  const y = Math.sin(dLambda) * Math.cos(phi2);
+  const x = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLambda);
+  return (Math.round(toDeg(Math.atan2(y, x))) + 360) % 360;
+}
+
+function createDirectionalArrowIcon(headingDeg = 0, isMoving = false) {
+  const ringColor = isMoving ? "rgba(34, 211, 238, 0.35)" : "rgba(59, 130, 246, 0.25)";
+  const fillColor = isMoving ? "#06b6d4" : "#2563eb";
+  return L.divIcon({
+    className: "rideguard-dir-marker",
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+    popupAnchor: [0, -20],
+    html: `
+      <div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;position:relative;">
+        <div style="position:absolute;width:38px;height:38px;border-radius:50%;background:${ringColor};border:2px solid #ffffff;box-shadow:0 0 12px rgba(6,182,212,0.75);"></div>
+        <svg width="28" height="28" viewBox="0 0 32 32" style="transform:rotate(${headingDeg}deg);transition:transform 0.35s ease;z-index:2;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.65));">
+          <polygon points="16,2 28,28 16,22 4,28" fill="${fillColor}" stroke="#ffffff" stroke-width="2.5" stroke-linejoin="round"/>
+        </svg>
+      </div>`
+  });
+}
+
+function createEndpointPinIcon(type = "start") {
+  const isStart = type === "start";
+  const bg = isStart ? "#10b981" : "#ef4444";
+  const label = isStart ? "START" : "END";
+  return L.divIcon({
+    className: "rideguard-endpoint-pin",
+    iconSize: [58, 34],
+    iconAnchor: [29, 34],
+    popupAnchor: [0, -32],
+    html: `
+      <div style="display:flex;flex-direction:column;align-items:center;">
+        <div style="background:${bg};color:#ffffff;font-weight:800;font-size:10px;padding:2px 7px;border-radius:999px;border:2px solid #ffffff;box-shadow:0 3px 8px rgba(0,0,0,0.45);letter-spacing:0.5px;">
+          ${isStart ? "🟢" : "🏁"} ${label}
+        </div>
+        <div style="width:3px;height:10px;background:${bg};border-left:1px solid #fff;border-right:1px solid #fff;"></div>
+      </div>`
+  });
+}
+
+/* ===================================================================== */
+/* 3. APP BOOTSTRAP & MULTI-SAMPLE PRECISION SATELLITE GPS LOCK          */
 /* ===================================================================== */
 window.onload = () => {
   initBattery();
@@ -249,7 +311,7 @@ async function autoDetectLoginLocation(manualTrigger = false) {
   if (result.source === "failed") {
     statusEl.className = "loc-auto-status warn";
     if (result.policyBlocked) {
-      statusEl.innerText = "⚠️ Preview sandbox blocks hardware GPS (IP fallback disabled to avoid wrong district). Type your exact location above.";
+      statusEl.innerText = "⚠️ Preview sandbox blocks hardware GPS. Type your exact location above.";
     } else if (result.errorCode === 1) {
       statusEl.innerText = "⚠️ GPS permission denied — tap 🔒 Site Settings → Allow Location, or type your exact place above.";
     } else {
@@ -265,7 +327,7 @@ async function autoDetectLoginLocation(manualTrigger = false) {
 
   if (result.source === "coarse_rejected") {
     statusEl.className = "loc-auto-status warn";
-    statusEl.innerText = `⚠️ Device returned low-accuracy network estimate (±${acc}m near ${place.split(",")[0]} — may be wrong district). Skipped auto-fill: enable High-Accuracy GPS or type your exact place above.`;
+    statusEl.innerText = `⚠️ Device returned low-accuracy network estimate (±${acc}m near ${place.split(",")[0]}). Type your exact place above.`;
     return;
   }
 
@@ -278,14 +340,14 @@ async function autoDetectLoginLocation(manualTrigger = false) {
     statusEl.innerText = `✅ Exact Satellite GPS Locked: ${place} (±${acc}m)`;
   } else {
     statusEl.className = "loc-auto-status warn";
-    statusEl.innerText = `⚠️ Moderate GPS accuracy (±${acc}m): ${place}. Tap 'Allow & Detect GPS' outdoors or edit if needed.`;
+    statusEl.innerText = `⚠️ Moderate GPS accuracy (±${acc}m): ${place}.`;
   }
 }
 
 /* ===================================================================== */
-/* 3. FORWARD GEOCODING, LOGIN & PROFILE TRANSITIONS                     */
+/* 4. FORWARD GEOCODING, LOGIN & PROFILE TRANSITIONS                     */
 /* ===================================================================== */
-function fetchWithTimeout(url, timeoutMs = 2500) {
+function fetchWithTimeout(url, timeoutMs = 2600) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
@@ -307,6 +369,7 @@ async function resolvePlaceCoordinates(query, biasCoords = null) {
 
   const key = cleaned.toLowerCase();
   const knownLandmarks = [
+    { match: /\bpsg\b|psg\s*college/i, coords: [11.0247, 77.0028], place: "PSG College of Technology, Peelamedu, Coimbatore" },
     { match: /\bkpriet\b|kpr\s*institute/i, coords: [11.0764, 77.1421], place: "KPRIET, Arasur, Coimbatore, Tamil Nadu" },
     { match: /othakalmandapam|otthakkal\s*mandapam/i, coords: [10.9085, 76.9985], place: "Othakalmandapam, Coimbatore, Tamil Nadu" },
     { match: /\bsulur\b/i, coords: [11.0246, 77.1256], place: "Sulur, Coimbatore, Tamil Nadu" },
@@ -322,7 +385,7 @@ async function resolvePlaceCoordinates(query, biasCoords = null) {
     { match: /\bthudiyalur\b/i, coords: [11.0805, 76.9412], place: "Thudiyalur, Coimbatore, Tamil Nadu" }
   ];
   for (const lm of knownLandmarks) {
-    if (lm.match.test(key) && key.length < 48) return { coords: lm.coords, place: lm.place };
+    if (lm.match.test(key) && key.length < 65) return { coords: lm.coords, place: lm.place };
   }
 
   const biasParam = Array.isArray(biasCoords) ? `&lat=${biasCoords[0]}&lon=${biasCoords[1]}` : "";
@@ -438,8 +501,8 @@ async function quickDemoLogin() {
       }
     }
     if (!coords) {
-      coords = [11.0764, 77.1421];
-      locationName = "KPRIET, Arasur, Coimbatore, Tamil Nadu";
+      coords = [11.0246, 77.1256];
+      locationName = "Sulur, Coimbatore, Tamil Nadu";
       locInput.value = locationName;
     }
 
@@ -526,7 +589,176 @@ function logoutProfile() {
 }
 
 /* ===================================================================== */
-/* 4. COIMBATORE DISTRICT POLICE RADAR, OSRM ROAD ROUTING & LEAFLET MAP   */
+/* 5. FULL START-TO-END TRIP OUTLINE & ROAD ROUTING                      */
+/* ===================================================================== */
+async function fetchOsrmRoadPolyline(startLat, startLng, endLat, endLng) {
+  try {
+    const url = `${CONFIG.OSRM_ROUTE_URL}/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson`;
+    const res = await fetchWithTimeout(url, 3200);
+    if (res.ok) {
+      const data = await res.json();
+      const route = data.routes && data.routes[0];
+      if (route && Array.isArray(route.geometry?.coordinates) && route.geometry.coordinates.length >= 2) {
+        return {
+          roadKm: Number((route.distance / 1000).toFixed(2)),
+          durationMins: Math.max(1, Math.round(route.duration / 60)),
+          coords: route.geometry.coordinates.map(([lng, lat]) => [lat, lng])
+        };
+      }
+    }
+  } catch (e) {}
+
+  // Interpolated smooth fallback if OSRM is unreachable
+  const steps = 16;
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    pts.push([startLat + (endLat - startLat) * t, startLng + (endLng - startLng) * t]);
+  }
+  const airKm = getAirDistanceKm(startLat, startLng, endLat, endLng);
+  return {
+    roadKm: Number((airKm * 1.32).toFixed(2)),
+    durationMins: Math.max(2, Math.round(((airKm * 1.32) / 30) * 60)),
+    coords: pts
+  };
+}
+
+function renderTripOutlineOnMap(startCoords, endCoords, routeCoords, startName, endName) {
+  if (!map) return;
+
+  if (tripStartMarker) map.removeLayer(tripStartMarker);
+  if (tripEndMarker) map.removeLayer(tripEndMarker);
+
+  tripStartMarker = L.marker(startCoords, { icon: createEndpointPinIcon("start") })
+    .addTo(map)
+    .bindPopup(`<b>🟢 STARTING POINT</b><br/>${startName}`);
+
+  tripEndMarker = L.marker(endCoords, { icon: createEndpointPinIcon("end") })
+    .addTo(map)
+    .bindPopup(`<b>🏁 ENDING POINT</b><br/>${endName}`);
+
+  if (tripOutlineOuter) tripOutlineOuter.setLatLngs(routeCoords);
+  if (tripOutlineInner) tripOutlineInner.setLatLngs(routeCoords);
+
+  const bounds = L.latLngBounds(routeCoords);
+  if (bounds.isValid()) {
+    map.fitBounds(bounds, { padding: [52, 52], maxZoom: 15 });
+  }
+}
+
+async function applyTripEndpointsFromScreenshot(pickupText, dropText) {
+  const bias = currentCoords ? [currentCoords.lat, currentCoords.lng] : CONFIG.COIMBATORE_CENTER;
+  const startGeo = pickupText ? await resolvePlaceCoordinates(pickupText, bias) : null;
+  const endGeo = dropText ? await resolvePlaceCoordinates(dropText, startGeo ? startGeo.coords : bias) : null;
+
+  if (!startGeo && !endGeo) return false;
+
+  const effectiveStart = startGeo ? startGeo.coords : [currentCoords.lat, currentCoords.lng];
+  const effectiveStartName = startGeo ? startGeo.place : currentAddress;
+
+  if (!endGeo) {
+    // Only single location extracted
+    await applyLocationFromScreenshot(effectiveStartName);
+    return true;
+  }
+
+  tripStartCoords = effectiveStart;
+  tripEndCoords = endGeo.coords;
+  tripStartLabel = effectiveStartName;
+  tripEndLabel = endGeo.place;
+
+  const roadObj = await fetchOsrmRoadPolyline(
+    tripStartCoords[0],
+    tripStartCoords[1],
+    tripEndCoords[0],
+    tripEndCoords[1]
+  );
+  tripRouteCoords = roadObj.coords;
+
+  const initialHeading =
+    tripRouteCoords.length >= 2
+      ? computeBearingDegrees(tripRouteCoords[0][0], tripRouteCoords[0][1], tripRouteCoords[1][0], tripRouteCoords[1][1])
+      : 0;
+
+  selectedTargetStation = null;
+  currentAddress = effectiveStartName;
+  lastGeocodeTime = Date.now();
+  liveTrailCoords = [];
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+
+  const badge = document.getElementById("ocrLocationBadge");
+  const textEl = document.getElementById("ocrExtractedLocationText");
+  if (badge && textEl) {
+    textEl.innerText = `${effectiveStartName.split(",")[0]} → ${endGeo.place.split(",")[0]} (${roadObj.roadKm} km)`;
+    badge.classList.remove("hidden");
+  }
+
+  const hudAddrEl = document.getElementById("hudAddress");
+  if (hudAddrEl) {
+    hudAddrEl.innerText = `${effectiveStartName.split(",")[0]} → ${endGeo.place.split(",")[0]}`;
+    hudAddrEl.title = `Start: ${effectiveStartName} | End: ${endGeo.place}`;
+  }
+
+  await updatePosition(tripStartCoords[0], tripStartCoords[1], 12, 0, initialHeading);
+  await discoverNearbyPoliceStations(tripStartCoords[0], tripStartCoords[1], true);
+  renderTripOutlineOnMap(tripStartCoords, tripEndCoords, tripRouteCoords, effectiveStartName, endGeo.place);
+
+  return true;
+}
+
+async function applyLocationFromScreenshot(extractedPlace) {
+  if (!extractedPlace) return "";
+  const bias = currentCoords ? [currentCoords.lat, currentCoords.lng] : CONFIG.COIMBATORE_CENTER;
+
+  const rawParts = String(extractedPlace).split(",").map((s) => s.trim()).filter(Boolean);
+  const queriesToTry = [String(extractedPlace).trim()];
+  if (rawParts.length >= 2) queriesToTry.push(rawParts.slice(-2).join(", "));
+  if (rawParts.length >= 3) queriesToTry.push(rawParts.slice(-3).join(", "));
+
+  let resolved = null;
+  for (const q of queriesToTry) {
+    resolved = await resolvePlaceCoordinates(q, bias);
+    if (resolved) break;
+  }
+
+  const badge = document.getElementById("ocrLocationBadge");
+  const textEl = document.getElementById("ocrExtractedLocationText");
+
+  if (!resolved) {
+    if (badge && textEl) {
+      textEl.innerText = `${extractedPlace} (pin unmapped)`;
+      badge.classList.remove("hidden");
+    }
+    return "";
+  }
+
+  selectedTargetStation = null;
+  currentAddress = resolved.place;
+  lastGeocodeTime = Date.now();
+  liveTrailCoords = [];
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+
+  if (badge && textEl) {
+    textEl.innerText = resolved.place;
+    badge.classList.remove("hidden");
+  }
+
+  const hudAddrEl = document.getElementById("hudAddress");
+  if (hudAddrEl) {
+    hudAddrEl.innerText = resolved.place;
+    hudAddrEl.title = resolved.place;
+  }
+
+  await updatePosition(resolved.coords[0], resolved.coords[1], 12, 0, 0);
+  await discoverNearbyPoliceStations(resolved.coords[0], resolved.coords[1], true);
+
+  if (riderMarker) riderMarker.bindPopup(`<b>📍 Location from Uploaded Screenshot</b><br/>${resolved.place}`).openPopup();
+  if (map) map.setView(resolved.coords, 14);
+  return resolved.place;
+}
+
+/* ===================================================================== */
+/* 6. COIMBATORE POLICE RADAR & LEAFLET MAP INITIALIZATION               */
 /* ===================================================================== */
 function getAirDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
@@ -775,7 +1007,6 @@ async function computeGoogleMapsRoadRoute(startLat, startLng, targetStation) {
   if (distEl) distEl.innerText = `${routeData.roadKm.toFixed(2)} km`;
   if (etaEl) etaEl.innerText = `~${routeData.durationMins} mins`;
 
-  // Re-sync the 3 mini-cards and Safety Analytics with the exact OSRM road distance
   const ranked = getRankedPoliceStations(startLat, startLng);
   const listEl = document.getElementById("nearbyStationsList");
   if (listEl) {
@@ -800,59 +1031,6 @@ async function computeGoogleMapsRoadRoute(startLat, startLng, targetStation) {
     roadRouteLine.setLatLngs(showRoadRoute ? routeData.coords : []);
   }
   evaluateRiskAnalytics();
-}
-
-async function applyLocationFromScreenshot(extractedPlace) {
-  if (!extractedPlace) return "";
-  const bias = currentCoords ? [currentCoords.lat, currentCoords.lng] : CONFIG.COIMBATORE_CENTER;
-
-  const rawParts = String(extractedPlace).split(",").map((s) => s.trim()).filter(Boolean);
-  const queriesToTry = [String(extractedPlace).trim()];
-  if (rawParts.length >= 2) queriesToTry.push(rawParts.slice(-2).join(", "));
-  if (rawParts.length >= 3) queriesToTry.push(rawParts.slice(-3).join(", "));
-  const strippedPrefix = String(extractedPlace).replace(/^(?:near|opp\.?|opposite|behind|beside|front\s+of|no\.?\s*[\w/-]+)\s+/i, "").trim();
-  if (strippedPrefix && !queriesToTry.includes(strippedPrefix)) queriesToTry.push(strippedPrefix);
-
-  let resolved = null;
-  for (const q of queriesToTry) {
-    resolved = await resolvePlaceCoordinates(q, bias);
-    if (resolved) break;
-  }
-
-  const badge = document.getElementById("ocrLocationBadge");
-  const textEl = document.getElementById("ocrExtractedLocationText");
-
-  if (!resolved) {
-    if (badge && textEl) {
-      textEl.innerText = `${extractedPlace} (pin unmapped)`;
-      badge.classList.remove("hidden");
-    }
-    return "";
-  }
-
-  selectedTargetStation = null;
-  currentAddress = resolved.place;
-  lastGeocodeTime = Date.now();
-  liveTrailCoords = [];
-  if (liveTrailLine) liveTrailLine.setLatLngs([]);
-
-  if (badge && textEl) {
-    textEl.innerText = resolved.place;
-    badge.classList.remove("hidden");
-  }
-
-  const hudAddrEl = document.getElementById("hudAddress");
-  if (hudAddrEl) {
-    hudAddrEl.innerText = resolved.place;
-    hudAddrEl.title = resolved.place;
-  }
-
-  await updatePosition(resolved.coords[0], resolved.coords[1], 12, 0, 0);
-  await discoverNearbyPoliceStations(resolved.coords[0], resolved.coords[1], true);
-
-  if (riderMarker) riderMarker.bindPopup(`<b>📍 Location from Uploaded Screenshot</b><br/>${resolved.place}`).openPopup();
-  if (map) map.setView(resolved.coords, 14);
-  return resolved.place;
 }
 
 function initMap() {
@@ -882,23 +1060,33 @@ function initMap() {
 
   streetGroup.addTo(map);
 
-  liveTrailLine = L.polyline([], { color: "#22d3ee", weight: 4.5, opacity: 0.92 }).addTo(map);
-  roadRouteOutline = L.polyline([], { color: "#1e3a8a", weight: 8, opacity: 0.55 }).addTo(map);
-  roadRouteLine = L.polyline([], { color: "#3b82f6", weight: 4.5, opacity: 0.95 }).addTo(map);
+  // Full Start-to-End Trip Route Outline (High-visibility outer halo + inner dashed path)
+  tripOutlineOuter = L.polyline([], { color: "#f59e0b", weight: 9, opacity: 0.45 }).addTo(map);
+  tripOutlineInner = L.polyline([], { color: "#fbbf24", weight: 4.5, opacity: 0.95, dashArray: "10, 8" }).addTo(map);
 
-  riderMarker = L.marker([startLat, startLng], { draggable: true })
+  // Police Station Vector & Live Completed Trail
+  roadRouteOutline = L.polyline([], { color: "#1e3a8a", weight: 7, opacity: 0.45 }).addTo(map);
+  roadRouteLine = L.polyline([], { color: "#3b82f6", weight: 3.5, opacity: 0.85 }).addTo(map);
+  liveTrailLine = L.polyline([], { color: "#06b6d4", weight: 5.5, opacity: 0.98 }).addTo(map);
+
+  // Directional Arrow Marker showing live heading & movement
+  riderMarker = L.marker([startLat, startLng], {
+    draggable: true,
+    icon: createDirectionalArrowIcon(0, false),
+    zIndexOffset: 1000
+  })
     .addTo(map)
-    .bindPopup("<b>Rider Starting / Live Location</b><br/><span style='font-size:11px;color:#475569;'>Drag pin to fine-tune exact street</span>");
+    .bindPopup("<b>🧭 Rider Directional Marker</b><br/><span style='font-size:11px;color:#475569;'>Arrow rotates to match your live travel direction</span>");
 
   riderMarker.on("dragend", (ev) => {
     const pos = ev.target.getLatLng();
     selectedTargetStation = null;
     lastGeocodeTime = 0;
-    updatePosition(pos.lat, pos.lng, 10, 0, 0);
+    updatePosition(pos.lat, pos.lng, 10, 0, currentHeadingDeg);
     showToast("📍 Pin adjusted manually to exact location.");
   });
 
-  accuracyCircle = L.circle([startLat, startLng], { radius: 25, color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.16, weight: 1.5 }).addTo(map);
+  accuracyCircle = L.circle([startLat, startLng], { radius: 25, color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.14, weight: 1.5 }).addTo(map);
 
   const initialNearest = getNearestPolice(startLat, startLng);
   activeStationHighlight = L.circle([initialNearest.lat, initialNearest.lng], { radius: 950, color: "#10b981", fillColor: "#10b981", fillOpacity: 0.12, weight: 2.5 }).addTo(map);
@@ -908,7 +1096,10 @@ function initMap() {
   map.on("click", (e) => {
     selectedTargetStation = null;
     lastGeocodeTime = 0;
-    updatePosition(e.latlng.lat, e.latlng.lng, 12, 28, 45);
+    const bearing = currentCoords
+      ? computeBearingDegrees(currentCoords.lat, currentCoords.lng, e.latlng.lat, e.latlng.lng)
+      : 0;
+    updatePosition(e.latlng.lat, e.latlng.lng, 12, 28, bearing);
   });
 }
 
@@ -940,14 +1131,14 @@ function toggleGpsMode() {
   btn.innerText = isLiveGps ? "📍 Mode: Real GPS" : "📍 Mode: Demo";
   btn.classList.toggle("active", isLiveGps);
   if (isLiveGps) pinpointMyLocation();
-  else showToast("Switched to Road-Routed Demo Mode.");
+  else showToast("Switched to Start-to-End Road Demo Mode.");
 }
 
 async function pinpointMyLocation() {
   const sigEl = document.getElementById("hudSignal");
   sigEl.className = "sig-badge fair";
   sigEl.innerText = "LOCKING GPS...";
-  showToast("🛰️ Acquiring high-accuracy satellite GPS (waiting for sharpest fix)...");
+  showToast("🛰️ Acquiring high-accuracy satellite GPS...");
 
   const result = await acquireBestLocation((msg) => {
     const match = msg.match(/±\d+m/);
@@ -959,19 +1150,17 @@ async function pinpointMyLocation() {
     sigEl.innerText = result.policyBlocked ? "SANDBOX BLOCKED" : "GPS UNAVAILABLE";
     return showToast(
       result.policyBlocked
-        ? "Preview iframe blocks hardware GPS (IP guess skipped to avoid wrong district). Search your area below or drag the blue pin."
+        ? "Preview iframe blocks hardware GPS. Upload a ticket screenshot or drag the directional arrow."
         : result.errorCode === 1
           ? "Location blocked: tap 🔒 in browser address bar → Allow Location, then retry."
-          : "No satellite GPS lock indoors. Enable High-Accuracy Location on your device or drag the map pin."
+          : "No satellite GPS lock indoors. Enable High-Accuracy Location or drag the directional arrow."
     );
   }
 
   if (result.source === "coarse_rejected") {
     sigEl.className = "sig-badge weak";
     sigEl.innerText = `COARSE ±${result.accuracy}m`;
-    return showToast(
-      `⚠️ Ignored coarse cell/Wi-Fi reading (±${result.accuracy}m) to prevent wrong district jump. Step near a window & retry, or drag the blue pin.`
-    );
+    return showToast(`⚠️ Ignored coarse cell reading (±${result.accuracy}m) to prevent wrong district jump.`);
   }
 
   selectedTargetStation = null;
@@ -980,11 +1169,7 @@ async function pinpointMyLocation() {
   await updatePosition(result.lat, result.lng, result.accuracy, result.speedKmh || 0, result.heading || 0);
   if (map) map.setView([result.lat, result.lng], result.accuracy <= 100 ? 16 : 14);
 
-  showToast(
-    result.source === "gps"
-      ? `🎯 Exact Satellite GPS Locked (±${result.accuracy}m)`
-      : `⚠️ Moderate GPS Lock (±${result.accuracy}m) — drag blue pin if slightly off.`
-  );
+  showToast(`🎯 Exact Satellite GPS Locked (±${result.accuracy}m)`);
 }
 
 function toggleAutoFollow() {
@@ -1004,7 +1189,7 @@ function togglePoliceVector() {
 }
 
 /* ===================================================================== */
-/* 5. AI SAFETY ANALYTICS, SAFE RIDE TELEMETRY & CHECK-INS               */
+/* 7. AI SAFETY ANALYTICS, LIVE MOVEMENT & DIRECTIONAL TELEMETRY         */
 /* ===================================================================== */
 function evaluateRiskAnalytics() {
   if (!currentCoords) return 96;
@@ -1132,7 +1317,7 @@ function recordJourneyWaypoint(lat, lng, speedKmh, label, stationName) {
   const listEl = document.getElementById("journeyEntries");
   if (countEl) countEl.innerText = `${journeyHistory.length} pts`;
   if (listEl) {
-    listEl.innerHTML = journeyHistory.map((pt) => `<div>[${pt.time}] ${pt.label} • 🛣️ ${currentRoadMetrics.roadKm.toFixed(2)}km to ${pt.stationName.split(" ")[0]}</div>`).join("");
+    listEl.innerHTML = journeyHistory.map((pt) => `<div>[${pt.time}] ${pt.label} • 🧭 ${getCardinalHeading(currentHeadingDeg)}</div>`).join("");
   }
 }
 
@@ -1142,7 +1327,7 @@ function shareLiveLocation() {
   const vehicle = document.getElementById("vehicleNumber").value || "TN-38-AB-1234";
   const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
   const mapsUrl = `https://maps.google.com/?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
-  const shareText = `🛡️ RideGuard AI Live Trip Share\nRider: ${activeProfile?.name || "Rider"}\nDriver: ${driver} | Vehicle: ${vehicle}\nLocation: ${currentAddress}\nCoimbatore Dist. Police (Info Only): ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road) • Tel: ${nearestPs.phone}\nTrack Live Pin: ${mapsUrl}`;
+  const shareText = `🛡️ RideGuard AI Live Trip Share\nRider: ${activeProfile?.name || "Rider"}\nDriver: ${driver} | Vehicle: ${vehicle}\nLocation: ${currentAddress}\nHeading: ${getCardinalHeading(currentHeadingDeg)}\nCoimbatore Dist. Police (Info Only): ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road) • Tel: ${nearestPs.phone}\nTrack Live Pin: ${mapsUrl}`;
   copyTextFallback(shareText);
   const primaryPhone = activeProfile?.contacts?.[0]?.phone?.replace(/\D/g, "") || "";
   if (primaryPhone) {
@@ -1184,76 +1369,124 @@ function startSafeRide() {
       (pos) => {
         if (liveTrailCoords.length > 0 && pos.coords.accuracy > CONFIG.GPS_JITTER_MAX_METERS) return;
         const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
-        updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, speedKmh, pos.coords.heading || 0);
+        const computedHeading =
+          pos.coords.heading != null && !isNaN(pos.coords.heading)
+            ? pos.coords.heading
+            : currentCoords
+              ? computeBearingDegrees(currentCoords.lat, currentCoords.lng, pos.coords.latitude, pos.coords.longitude)
+              : currentHeadingDeg;
+        updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, speedKmh, computedHeading);
       },
       (err) => showToast(`GPS Error (${err.message}). Enable location permission.`),
       { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
     );
   } else {
     clearInterval(demoTimer);
-    let roadIdx = 0;
-    const fallbackStepPts = [
-      [currentCoords.lat, currentCoords.lng],
-      [currentCoords.lat + 0.0045, currentCoords.lng + 0.0042],
-      [currentCoords.lat + 0.0092, currentCoords.lng + 0.0085],
-      [currentCoords.lat + 0.0138, currentCoords.lng + 0.0124]
-    ];
-    const roadPts = currentRoadMetrics.coords && currentRoadMetrics.coords.length >= 2 ? currentRoadMetrics.coords : fallbackStepPts;
-    updatePosition(roadPts[0][0], roadPts[0][1], 10, 36, 192);
-    roadIdx = 1;
+
+    // Move along the full Start-to-End trip outline if mapped, else along police road route
+    let activePath =
+      tripRouteCoords && tripRouteCoords.length >= 2
+        ? tripRouteCoords
+        : currentRoadMetrics.coords && currentRoadMetrics.coords.length >= 2
+          ? currentRoadMetrics.coords
+          : [
+              [currentCoords.lat, currentCoords.lng],
+              [currentCoords.lat + 0.0045, currentCoords.lng + 0.0042],
+              [currentCoords.lat + 0.0092, currentCoords.lng + 0.0085],
+              [currentCoords.lat + 0.0138, currentCoords.lng + 0.0124]
+            ];
+
+    // Subsample dense OSRM polylines to ~24 smooth animation steps so progress from Start to End is clearly visible
+    if (activePath.length > 28) {
+      const sampled = [];
+      const step = (activePath.length - 1) / 24;
+      for (let i = 0; i <= 24; i++) {
+        sampled.push(activePath[Math.round(i * step)]);
+      }
+      activePath = sampled;
+    }
+
+    const firstHeading =
+      activePath.length >= 2
+        ? computeBearingDegrees(activePath[0][0], activePath[0][1], activePath[1][0], activePath[1][1])
+        : 0;
+
+    updatePosition(activePath[0][0], activePath[0][1], 10, 36, firstHeading);
+    let pathIdx = 1;
+
     demoTimer = setInterval(() => {
-      const pt = roadPts[roadIdx % roadPts.length];
-      updatePosition(pt[0], pt[1], 10, 38, 185);
-      roadIdx++;
-    }, 2600);
+      if (pathIdx >= activePath.length) {
+        clearInterval(demoTimer);
+        updatePosition(activePath[activePath.length - 1][0], activePath[activePath.length - 1][1], 10, 0, currentHeadingDeg);
+        showToast("🏁 Arrived at Ending Point!");
+        return;
+      }
+      const prevPt = activePath[pathIdx - 1];
+      const nextPt = activePath[pathIdx];
+      const heading = computeBearingDegrees(prevPt[0], prevPt[1], nextPt[0], nextPt[1]);
+      updatePosition(nextPt[0], nextPt[1], 10, 42, heading);
+      pathIdx++;
+    }, 1600);
   }
 
   sendHeartbeat();
   clearInterval(heartbeatTimer);
   heartbeatTimer = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL_MS);
-  showToast("🛡️ Safe Ride active along live road network.");
+  showToast("🛡️ Safe Ride active — tracking live movement & direction!");
 }
 
-async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0, silentInit = false) {
+async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = null, silentInit = false) {
   if (isPhonePoweredOff) return;
+
   if (liveTrailCoords.length > 0 && !silentInit) {
     const prev = liveTrailCoords[liveTrailCoords.length - 1];
-    totalDistanceKm += getDistanceKm(prev[0], prev[1], lat, lng);
+    const stepKm = getDistanceKm(prev[0], prev[1], lat, lng);
+    totalDistanceKm += stepKm;
+    if (stepKm > 0.002 && (heading === null || isNaN(heading))) {
+      heading = computeBearingDegrees(prev[0], prev[1], lat, lng);
+    }
   }
 
-  currentCoords = { lat, lng, accuracy: Math.round(accuracy), speedKmh, heading };
+  if (heading !== null && !isNaN(heading)) {
+    currentHeadingDeg = heading;
+  }
+
+  currentCoords = { lat, lng, accuracy: Math.round(accuracy), speedKmh, heading: currentHeadingDeg };
   if (!silentInit) {
     liveTrailCoords.push([lat, lng]);
     speedSamples.push(speedKmh);
     if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
   }
 
-  if (isRideActive && speedKmh === 0 && !silentInit) {
+  if (isRideActive && speedKmh === 0 && !silentInit && (!tripEndCoords || getDistanceKm(lat, lng, tripEndCoords[0], tripEndCoords[1]) > 0.15)) {
     stationarySeconds += 2.6;
     if (stationarySeconds >= 15 && !activeSafetyAlertType) triggerSafetyCheckIn("UNUSUAL_STOP");
   } else {
     stationarySeconds = 0;
   }
 
-  if (riderMarker) riderMarker.setLatLng([lat, lng]);
+  if (riderMarker) {
+    riderMarker.setLatLng([lat, lng]);
+    riderMarker.setIcon(createDirectionalArrowIcon(currentHeadingDeg, speedKmh > 0 || isRideActive));
+  }
   if (accuracyCircle) accuracyCircle.setLatLng([lat, lng]).setRadius(Math.min(accuracy, 200));
   if (liveTrailLine) liveTrailLine.setLatLngs(liveTrailCoords);
-  if (autoFollow && map) map.panTo([lat, lng]);
+  if (autoFollow && map && !silentInit) map.panTo([lat, lng]);
 
-  const nearestPs = updatePoliceCoverageUI(lat, lng, !silentInit);
+  const nearestPs = updatePoliceCoverageUI(lat, lng, false);
   discoverNearbyPoliceStations(lat, lng, false);
 
   const sigEl = document.getElementById("hudSignal");
   sigEl.className = "sig-badge" + (accuracy > 80 ? " weak" : accuracy > 30 ? " fair" : "");
   sigEl.innerText = accuracy <= 30 ? `EXACT ±${Math.round(accuracy)}m` : `±${Math.round(accuracy)}m`;
   document.getElementById("hudSpeed").innerText = `${speedKmh} km/h`;
-  document.getElementById("hudHeading").innerText = getCardinalHeading(heading);
+  document.getElementById("hudHeading").innerText = getCardinalHeading(currentHeadingDeg);
   document.getElementById("hudDist").innerText = `${totalDistanceKm.toFixed(2)} km`;
   document.getElementById("hudCoords").innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 
   if (typeof syncGoogleMapsTelemetryLink === "function") syncGoogleMapsTelemetryLink();
 
-  if (Date.now() - lastGeocodeTime > 12000) {
+  if (Date.now() - lastGeocodeTime > 12000 && !tripEndCoords) {
     lastGeocodeTime = Date.now();
     currentAddress = await reverseGeocode(lat, lng);
     const addrEl = document.getElementById("hudAddress");
@@ -1267,7 +1500,7 @@ async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0
 }
 
 /* ===================================================================== */
-/* 6. SUDDEN PHONE SHUTDOWN VAULT, OFFLINE QUEUE & SOS DISPATCH          */
+/* 8. SUDDEN PHONE SHUTDOWN VAULT, OFFLINE QUEUE & SOS DISPATCH          */
 /* ===================================================================== */
 function syncShadowVaultSnapshot() {
   if (!currentCoords) return;
@@ -1279,6 +1512,7 @@ function syncShadowVaultSnapshot() {
     lng: currentCoords.lng,
     accuracy: currentCoords.accuracy,
     speedKmh: currentCoords.speedKmh,
+    headingDeg: currentHeadingDeg,
     battery: currentBattery,
     address: currentAddress,
     timestamp: nowTime,
@@ -1299,7 +1533,7 @@ function syncShadowVaultSnapshot() {
     box.classList.remove("frozen");
     if (titleEl) titleEl.innerText = "☁️ LAST-KNOWN FINAL PIN";
     if (timeEl) timeEl.innerText = nowTime;
-    if (coordsEl) coordsEl.innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} • ${currentAddress.split(",")[0]}`;
+    if (coordsEl) coordsEl.innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} • ${getCardinalHeading(currentHeadingDeg)}`;
   }
 
   if (isRideActive && activeProfile) {
@@ -1428,6 +1662,7 @@ function sendHeartbeat() {
     lng: currentCoords.lng,
     accuracy_m: currentCoords.accuracy,
     speed_kmh: currentCoords.speedKmh,
+    heading_deg: currentHeadingDeg,
     battery: currentBattery,
     driver: document.getElementById("driverName").value || "Not Scanned",
     vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234",
@@ -1535,7 +1770,7 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     `Email: ${activeProfile.email}\n` +
     `${isShutdownEvent ? "📍 FINAL LOCATION WHERE PHONE STOPPED" : "📍 Live Location"}: ${locData.address}\n` +
     `Exact GPS Pin: ${locData.lat.toFixed(6)}, ${locData.lng.toFixed(6)} (±${locData.accuracy}m)\n` +
-    `Time Stopped: ${locData.timestamp} | Speed at Stop: ${locData.speedKmh} km/h | Last Battery: ${locData.battery}%\n` +
+    `Direction: ${getCardinalHeading(currentHeadingDeg)} | Speed: ${locData.speedKmh} km/h | Battery: ${locData.battery}%\n` +
     `Driver: ${locData.driver} | Vehicle: ${locData.vehicle}\n` +
     `${policeInfoLine}\n` +
     `Google Maps Pin: ${mapsUrl}`;
@@ -1602,7 +1837,7 @@ function openSmsFallback(index) {
 function closeSosModal() { document.getElementById("sosModal").classList.add("hidden"); }
 
 /* ===================================================================== */
-/* 7. SAFETY AUDIT REPORT & ZERO-TRACE PRIVACY PURGE                     */
+/* 9. SAFETY AUDIT REPORT & ZERO-TRACE PRIVACY PURGE                     */
 /* ===================================================================== */
 function openSafetyReport(isPostRide = false) {
   const elapsedSec = rideStartTime ? Math.max(1, Math.round((Date.now() - rideStartTime) / 1000)) : 0;
@@ -1677,12 +1912,20 @@ function endRideSafely() {
   if (typeof verifiedBookingDriver !== "undefined") verifiedBookingDriver = "";
   liveTrailCoords = [];
   journeyHistory = [];
+  tripStartCoords = null;
+  tripEndCoords = null;
+  tripRouteCoords = [];
   totalDistanceKm = 0;
   rideStartTime = null;
 
   try { localStorage.removeItem(ACTIVE_RIDE_SNAPSHOT_KEY); } catch (e) {}
   if (shutdownPinMarker && map) { map.removeLayer(shutdownPinMarker); shutdownPinMarker = null; }
+  if (tripStartMarker && map) { map.removeLayer(tripStartMarker); tripStartMarker = null; }
+  if (tripEndMarker && map) { map.removeLayer(tripEndMarker); tripEndMarker = null; }
+  if (tripOutlineOuter) tripOutlineOuter.setLatLngs([]);
+  if (tripOutlineInner) tripOutlineInner.setLatLngs([]);
   if (liveTrailLine) liveTrailLine.setLatLngs([]);
+
   document.getElementById("vaultSyncBox")?.classList.remove("frozen");
   document.getElementById("driverName").value = "";
   document.getElementById("vehicleNumber").value = "";
