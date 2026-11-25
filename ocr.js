@@ -1,362 +1,276 @@
-/**
- * ocr.js — Member 2: Fast Lazy-Loaded Tesseract.js v5 AI Screenshot Scanner,
- * Image Clarity Analyzer, Indian License Plate Repair, Strict Non-Driver
- * Header Filtering & Pickup/Drop Location Extractor.
- */
+/* ===================================================================== */
+/* ocr.js — RideGuard AI Auto-Ticket Reader & Live Map Sync (Tesseract v5) */
+/* ===================================================================== */
 
-let cachedOcrWorker = null;
-let tesseractLoadPromise = null;
+let ocrWorkerInstance = null;
+let ocrWorkerPromise = null;
 let verifiedBookingPlate = "";
 let verifiedBookingDriver = "";
 let isPlateMismatch = false;
 
-function ensureTesseractLoaded() {
-  if (typeof Tesseract !== "undefined") return Promise.resolve();
-  if (tesseractLoadPromise) return tesseractLoadPromise;
+const TESSERACT_CDN_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
 
-  tesseractLoadPromise = new Promise((resolve, reject) => {
+/* 1. Lazy-load Tesseract.js & prewarm worker in background */
+function ensureTesseractLoaded() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${TESSERACT_CDN_URL}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.Tesseract));
+      existing.addEventListener("error", reject);
+      return;
+    }
     const script = document.createElement("script");
-    script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    script.src = TESSERACT_CDN_URL;
     script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => {
-      tesseractLoadPromise = null;
-      reject(new Error("Failed to load Tesseract OCR engine."));
-    };
+    script.onload = () => resolve(window.Tesseract);
+    script.onerror = () => reject(new Error("Failed to load Tesseract OCR engine"));
     document.head.appendChild(script);
   });
-
-  return tesseractLoadPromise;
 }
 
 async function getOcrWorker() {
-  await ensureTesseractLoaded();
-  if (!cachedOcrWorker) {
-    cachedOcrWorker = await Tesseract.createWorker("eng");
-    await cachedOcrWorker.setParameters({
-      preserve_interword_spaces: "1"
-    });
-  }
-  return cachedOcrWorker;
+  if (ocrWorkerInstance) return ocrWorkerInstance;
+  if (ocrWorkerPromise) return ocrWorkerPromise;
+
+  ocrWorkerPromise = (async () => {
+    const Tesseract = await ensureTesseractLoaded();
+    const worker = await Tesseract.createWorker("eng");
+    ocrWorkerInstance = worker;
+    return worker;
+  })();
+
+  return ocrWorkerPromise;
 }
 
 function prewarmOcrWorker() {
-  setTimeout(() => {
-    getOcrWorker().catch(() => {});
-  }, 1200);
+  getOcrWorker().catch(() => {});
 }
 
-async function handleOCRUpload(event) {
-  const inputEl = event.target;
-  const file = inputEl.files && inputEl.files[0];
-  if (!file) return;
+/* 2. Bind File Input, Drag-and-Drop & Manual Plate Input Listeners */
+document.addEventListener("DOMContentLoaded", () => {
+  const fileInput = document.getElementById("screenshotInput");
+  const dropZone = document.getElementById("ocrDropZone") || document.getElementById("ocrPreview");
+  const plateInput = document.getElementById("vehicleNumber");
 
-  const preview = document.getElementById("ocrPreview");
-  const scanLine = document.getElementById("scanLine");
-  const statusEl = document.getElementById("ocrStatus");
-  const driverInput = document.getElementById("driverName");
-  const vehicleInput = document.getElementById("vehicleNumber");
-
-  verifiedBookingPlate = "";
-  verifiedBookingDriver = "";
-  isPlateMismatch = false;
-  driverInput.value = "";
-  vehicleInput.value = "";
-  document.getElementById("mismatchBanner")?.classList.add("hidden");
-  document.getElementById("ocrLocationBadge")?.classList.add("hidden");
-
-  // Render preview image cleanly and only revoke object URL after image finishes loading
-  const imgUrl = URL.createObjectURL(file);
-  preview.innerHTML = "";
-  const previewImg = document.createElement("img");
-  previewImg.alt = "Ride Screenshot";
-  previewImg.onload = () => URL.revokeObjectURL(imgUrl);
-  previewImg.onerror = () => URL.revokeObjectURL(imgUrl);
-  previewImg.src = imgUrl;
-  preview.appendChild(previewImg);
-
-  scanLine.classList.remove("hidden");
-  statusEl.classList.remove("success");
-  statusEl.innerText = "⚡ Initializing AI OCR & scanning ride card...";
-
-  try {
-    const worker = await getOcrWorker();
-
-    // Fast Pass 1: Focused ride-card scan (PSM 6) — completes in ~1.5s
-    const pass1Canvas = await buildProcessedCanvas(file, { mode: "autoCard", cropRegion: "bottomCard" });
-    updateImageQualityUI(pass1Canvas.clarityScore);
-    await worker.setParameters({ tessedit_pageseg_mode: "6" });
-    const pass1 = await worker.recognize(pass1Canvas.canvas);
-    let combinedText = pass1.data.text || "";
-
-    let plate = extractAndRepairIndianPlate(combinedText);
-    let extractedLoc = extractLocationFromOCR(combinedText, "", plate);
-    let driverMatch = extractDriverNameWithScore(combinedText, plate, extractedLoc);
-    let driver = driverMatch.name;
-    let driverConfidence = driverMatch.score;
-
-    // Pass 2: Full screenshot normalized scan (PSM 3) only if plate or location wasn't found in Pass 1
-    if (!plate || !extractedLoc) {
-      statusEl.innerText = "Pass 2/3: Scanning full screenshot for route & vehicle...";
-      const pass2Canvas = await buildProcessedCanvas(file, { mode: "gentle", cropRegion: "full" });
-      await worker.setParameters({ tessedit_pageseg_mode: "3" });
-      const pass2 = await worker.recognize(pass2Canvas.canvas);
-      const fullText = pass2.data.text || "";
-      combinedText = combinedText + "\n" + fullText;
-
-      if (!plate) plate = extractAndRepairIndianPlate(combinedText);
-      if (!extractedLoc) {
-        extractedLoc =
-          extractLocationFromOCR(fullText, driver, plate) ||
-          extractLocationFromOCR(combinedText, driver, plate);
-      }
-
-      const fullDriverMatch = extractDriverNameWithScore(fullText, plate, extractedLoc);
-      const mergedDriverMatch = extractDriverNameWithScore(combinedText, plate, extractedLoc);
-      const bestPass2 = fullDriverMatch.score >= mergedDriverMatch.score ? fullDriverMatch : mergedDriverMatch;
-      if (bestPass2.name && bestPass2.score > driverConfidence) {
-        driver = bestPass2.name;
-        driverConfidence = bestPass2.score;
-      }
-    }
-
-    // Pass 3: Otsu adaptive thresholding (PSM 11) only if vehicle plate is still missing
-    if (!plate) {
-      statusEl.innerText = "Pass 3/3: Deep Otsu sharpening on vehicle badge...";
-      const pass3Canvas = await buildProcessedCanvas(file, { mode: "otsu", cropRegion: "full" });
-      await worker.setParameters({ tessedit_pageseg_mode: "11" });
-      const pass3 = await worker.recognize(pass3Canvas.canvas);
-      const pass3Text = pass3.data.text || "";
-      combinedText += "\n" + pass3Text;
-
-      plate = extractAndRepairIndianPlate(combinedText);
-      if (!extractedLoc) extractedLoc = extractLocationFromOCR(combinedText, driver, plate);
-
-      const pass3DriverMatch = extractDriverNameWithScore(pass3Text, plate, extractedLoc);
-      if (pass3DriverMatch.name && pass3DriverMatch.score > driverConfidence) {
-        driver = pass3DriverMatch.name;
-        driverConfidence = pass3DriverMatch.score;
-      }
-    }
-
-    if (plate) {
-      verifiedBookingPlate = plate;
-      vehicleInput.value = plate;
-    }
-    if (driver) {
-      verifiedBookingDriver = driver;
-      driverInput.value = driver;
-    }
-
-    checkVehicleMismatch();
-    scanLine.classList.add("hidden");
-
-    let mapUpdatedPlace = "";
-    if (extractedLoc && typeof applyLocationFromScreenshot === "function") {
-      const applied = await applyLocationFromScreenshot(extractedLoc);
-      mapUpdatedPlace = applied || "";
-    }
-
-    const parts = [];
-    if (driver) parts.push(`Driver: ${driver}`);
-    if (plate) parts.push(`Plate: ${plate}`);
-    if (mapUpdatedPlace) parts.push(`📍 ${mapUpdatedPlace.split(",")[0]}`);
-    else if (extractedLoc) parts.push(`📍 ${extractedLoc.split(",")[0]}`);
-
-    if (parts.length > 0) {
-      statusEl.classList.add("success");
-      const note = !driver ? " (Driver name not in image)" : "";
-      statusEl.innerText = `✅ Autofilled: ${parts.join(" • ")}${note}`;
-      if (typeof showToast === "function") showToast(`📷 OCR Autofilled: ${parts.join(" • ")}`);
-    } else {
-      statusEl.innerText = "⚠️ Could not read ride text clearly. Please enter details manually.";
-    }
-  } catch (err) {
-    scanLine.classList.add("hidden");
-    statusEl.innerText = "❌ OCR scan failed. Please check internet for OCR engine or enter manually.";
-  } finally {
-    if (inputEl) inputEl.value = "";
-    if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
+  if (fileInput) {
+    fileInput.addEventListener("change", (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (file) processRideTicketFile(file);
+      e.target.value = ""; // Reset so re-uploading the same file works
+    });
   }
-}
 
-function updateImageQualityUI(clarityScore) {
-  const badge = document.getElementById("imageQualityBadge");
-  if (!badge) return;
-  if (clarityScore >= 60) {
-    badge.className = "q-badge good";
-    badge.innerText = `Clarity: ${clarityScore}% • Sharp`;
-  } else {
-    badge.className = "q-badge low";
-    badge.innerText = `⚠️ Clarity: ${clarityScore}% • Blurry (Verify)`;
+  if (dropZone) {
+    dropZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.classList.add("drag-over");
+    });
+    dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.classList.remove("drag-over");
+      const file = e.dataTransfer?.files?.[0];
+      if (file) processRideTicketFile(file);
+    });
   }
-}
 
-function buildProcessedCanvas(file, { mode = "gentle", cropRegion = "full" } = {}) {
+  if (plateInput) {
+    plateInput.addEventListener("input", () => {
+      plateInput.value = plateInput.value.toUpperCase();
+      validatePlateAgainstBooking();
+    });
+  }
+});
+
+/* 3. Image Pre-Processing & Clarity Scoring */
+function loadImageFromFile(file) {
   return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
     const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
-    img.onerror = () => {
-      URL.revokeObjectURL(objectUrl);
-      reject(new Error("Could not decode uploaded screenshot image."));
+    img.onload = () => resolve({ img, url });
+    img.onerror = (err) => {
+      URL.revokeObjectURL(url);
+      reject(err);
     };
-    img.onload = () => {
-      URL.revokeObjectURL(objectUrl);
-
-      const isTallScreenshot = img.height > img.width * 1.35;
-      const srcY = (cropRegion === "bottomCard" && isTallScreenshot) ? Math.round(img.height * 0.30) : 0;
-      const srcH = img.height - srcY;
-      const srcW = img.width;
-
-      // Optimal 1050px width cap keeps Tesseract WASM fast (~1.5s) with crisp text edges
-      let scale = 1;
-      if (srcW < 850) scale = Math.min(2.0, 1050 / srcW);
-      else if (srcW > 1050) scale = 1050 / srcW;
-      if (srcH * scale > 1750) scale = Math.min(scale, 1750 / srcH);
-
-      const canvas = document.createElement("canvas");
-      const ctx = canvas.getContext("2d");
-      canvas.width = Math.max(1, Math.round(srcW * scale));
-      canvas.height = Math.max(1, Math.round(srcH * scale));
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(img, 0, srcY, srcW, srcH, 0, 0, canvas.width, canvas.height);
-
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const data = imageData.data;
-
-      let luminanceSum = 0;
-      let edgeGradientSum = 0;
-      const totalPixels = data.length / 4;
-      const w = canvas.width;
-      const histogram = new Uint32Array(256);
-
-      for (let i = 0; i < data.length; i += 4) {
-        const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-        data[i] = data[i + 1] = data[i + 2] = gray;
-        luminanceSum += gray;
-        histogram[gray]++;
-        if (i >= 4 && (i / 4) % w !== 0) {
-          edgeGradientSum += Math.abs(gray - data[i - 4]);
-        }
-      }
-
-      const avgLuminance = luminanceSum / totalPixels;
-      const avgGradient = edgeGradientSum / totalPixels;
-      const clarityScore = Math.min(99, Math.max(38, Math.round(avgGradient * 6.5 + 42)));
-
-      if (mode === "otsu") {
-        let sumAll = 0;
-        for (let t = 0; t < 256; t++) sumAll += t * histogram[t];
-        let sumB = 0, wB = 0, varMax = 0, threshold = 128;
-        for (let t = 0; t < 256; t++) {
-          wB += histogram[t];
-          if (wB === 0) continue;
-          const wF = totalPixels - wB;
-          if (wF === 0) break;
-          sumB += t * histogram[t];
-          const mB = sumB / wB;
-          const mF = (sumAll - sumB) / wF;
-          const varBetween = wB * wF * (mB - mF) * (mB - mF);
-          if (varBetween > varMax) {
-            varMax = varBetween;
-            threshold = t;
-          }
-        }
-        const invertDark = avgLuminance < 125;
-        for (let i = 0; i < data.length; i += 4) {
-          const raw = invertDark ? 255 - data[i] : data[i];
-          const bin = raw > threshold ? 255 : 0;
-          data[i] = data[i + 1] = data[i + 2] = bin;
-        }
-      } else {
-        const shouldInvert = avgLuminance < 120;
-        const contrastFactor = mode === "gentle" ? 1.3 : 1.65;
-        for (let i = 0; i < data.length; i += 4) {
-          let val = shouldInvert ? 255 - data[i] : data[i];
-          val = (val - 128) * contrastFactor + 128;
-          val = val < 0 ? 0 : val > 255 ? 255 : val;
-          data[i] = data[i + 1] = data[i + 2] = val;
-        }
-      }
-
-      ctx.putImageData(imageData, 0, 0);
-      resolve({ canvas, clarityScore });
-    };
-    img.src = objectUrl;
+    img.src = url;
   });
 }
 
-function extractAndRepairIndianPlate(rawText) {
-  const validStates = new Set([
-    "AN", "AP", "AR", "AS", "BR", "CG", "CH", "DD", "DL", "DN", "GA", "GJ",
-    "HP", "HR", "JH", "JK", "KA", "KL", "LA", "LD", "MH", "ML", "MN", "MP",
-    "MZ", "NL", "OD", "OR", "PB", "PY", "RJ", "SK", "TN", "TR", "TS", "UK", "UP", "WB"
-  ]);
+function buildProcessedCanvas(img, { cropCard = false, useOtsu = false } = {}) {
+  const srcX = 0;
+  const srcY = cropCard ? Math.floor(img.height * 0.14) : 0;
+  const srcW = img.width;
+  const srcH = cropCard ? Math.floor(img.height * 0.72) : img.height;
 
-  const toLetter = (str) =>
-    str.replace(/0/g, "O").replace(/1/g, "I").replace(/2/g, "Z").replace(/4/g, "A")
-       .replace(/5/g, "S").replace(/6/g, "G").replace(/7/g, "T").replace(/8/g, "B");
+  const maxDim = 1100;
+  const scale = Math.min(1.6, maxDim / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
 
-  const toDigit = (str) =>
-    str.replace(/[ODQ]/g, "0").replace(/[IL|]/g, "1").replace(/Z/g, "2").replace(/E/g, "3")
-       .replace(/A/g, "4").replace(/S/g, "5").replace(/G/g, "6").replace(/T/g, "7").replace(/B/g, "8");
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, w, h);
 
-  const normalized = rawText
-    .toUpperCase()
-    .replace(/\bIND[\s.-]*([A-Z0-9]{2})/g, " $1")
-    .replace(/[^A-Z0-9\s.-]/g, " ")
-    .replace(/\s+/g, " ");
+  const imgData = ctx.getImageData(0, 0, w, h);
+  const d = imgData.data;
+  const gray = new Uint8Array(w * h);
+  const hist = new Uint32Array(256);
 
-  const candidateRegex = /\b([A-Z0-9]{2})[\s.-]*([A-Z0-9]{1,2})[\s.-]*([A-Z0-9]{1,3})[\s.-]*([A-Z0-9]{2}[\s.-]?[A-Z0-9]{2}|[A-Z0-9]{3,4})\b/g;
+  let contrastSum = 0;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    const lum = Math.round(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+    const boosted = Math.max(0, Math.min(255, Math.round((lum - 128) * 1.35 + 128)));
+    gray[p] = boosted;
+    hist[boosted]++;
+    if (p > 0) contrastSum += Math.abs(boosted - gray[p - 1]);
+  }
 
-  let bestCandidate = "";
-  let bestScore = -1;
-  let match;
+  const edgeDensity = contrastSum / (w * h);
+  const clarityPct = Math.max(38, Math.min(98, Math.round(45 + edgeDensity * 2.4)));
 
-  while ((match = candidateRegex.exec(normalized)) !== null) {
-    const rawState = match[1];
-    const rawRto = match[2];
-    const rawSeries = match[3];
-    const rawNum = match[4].replace(/[\s.-]/g, "");
+  if (useOtsu) {
+    let total = w * h;
+    let sum = 0;
+    for (let t = 0; t < 256; t++) sum += t * hist[t];
+    let sumB = 0;
+    let wB = 0;
+    let maxVar = 0;
+    let threshold = 128;
 
-    const state = toLetter(rawState);
-    const rto = toDigit(rawRto);
-    const series = toLetter(rawSeries);
-    const number = toDigit(rawNum);
-
-    if (
-      validStates.has(state) &&
-      /^\d{1,2}$/.test(rto) &&
-      /^[A-Z]{1,3}$/.test(series) &&
-      /^\d{3,4}$/.test(number)
-    ) {
-      let score = 10;
-      if (rawState === state) score += 5;
-      if (rawRto === rto && rto.length === 2) score += 4;
-      if (rawSeries === series) score += 3;
-      if (rawNum === number && number.length === 4) score += 6;
-      if (score > bestScore) {
-        bestScore = score;
-        bestCandidate = `${state}-${rto.padStart(2, "0")}-${series}-${number}`;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      const wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > maxVar) {
+        maxVar = between;
+        threshold = t;
       }
+    }
+
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      const val = gray[p] > threshold ? 255 : 0;
+      d[i] = d[i + 1] = d[i + 2] = val;
+    }
+  } else {
+    for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+      d[i] = d[i + 1] = d[i + 2] = gray[p];
     }
   }
 
-  if (bestCandidate) return bestCandidate;
+  ctx.putImageData(imgData, 0, 0);
+  return { canvas, clarityPct };
+}
 
-  const compactTokens = normalized.split(/\s+/).filter((tok) => tok.length >= 8 && tok.length <= 12);
-  for (const tok of compactTokens) {
-    for (let offset = 0; offset <= Math.min(2, tok.length - 8); offset++) {
-      const sub = tok.slice(offset);
-      const m = sub.match(/^([A-Z0-9]{2})([A-Z0-9]{2})([A-Z0-9]{1,3})([A-Z0-9]{4})/);
-      if (m) {
-        const state = toLetter(m[1]);
-        const rto = toDigit(m[2]);
-        const series = toLetter(m[3]);
-        const number = toDigit(m[4]);
-        if (validStates.has(state) && /^\d{2}$/.test(rto) && /^[A-Z]{1,3}$/.test(series) && /^\d{4}$/.test(number)) {
-          return `${state}-${rto}-${series}-${number}`;
+/* 4. Indian Vehicle Plate Repair & Extraction (e.g., TN-38-AB-1234) */
+function normalizePlateChars(raw, expectedType) {
+  const toAlpha = { "0": "O", "1": "I", "2": "Z", "5": "S", "6": "G", "8": "B" };
+  const toDigit = { "O": "0", "Q": "0", "D": "0", "I": "1", "L": "1", "Z": "2", "S": "5", "G": "6", "B": "8" };
+  return raw
+    .split("")
+    .map((ch) => (expectedType === "A" ? (toAlpha[ch] || ch) : (toDigit[ch] || ch)))
+    .join("");
+}
+
+function extractIndianVehiclePlate(text) {
+  const validStates = /^(AN|AP|AR|AS|BR|CG|CH|DD|DL|DN|GA|GJ|HP|HR|JH|JK|KA|KL|LA|LD|MH|ML|MN|MP|MZ|NL|OD|OR|PB|PY|RJ|SK|TN|TR|TS|UK|UP|WB)$/;
+  const cleaned = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, " ");
+  const candidates = cleaned.match(/\b[A-Z0-9]{2}[\s-]?[A-Z0-9]{1,2}[\s-]?[A-Z0-9]{1,3}[\s-]?[A-Z0-9]{3,4}\b/g) || [];
+
+  for (const raw of candidates) {
+    const compact = raw.replace(/[\s-]/g, "");
+    if (compact.length < 8 || compact.length > 11) continue;
+
+    const state = normalizePlateChars(compact.slice(0, 2), "A");
+    if (!validStates.test(state)) continue;
+
+    const rto = normalizePlateChars(compact.slice(2, 4), "D");
+    if (!/^\d{2}$/.test(rto)) continue;
+
+    const tail = compact.slice(4);
+    const tailMatch = tail.match(/^([A-Z0-9]{1,3}?)([A-Z0-9]{3,4})$/);
+    if (!tailMatch) continue;
+
+    const series = normalizePlateChars(tailMatch[1], "A");
+    const num = normalizePlateChars(tailMatch[2], "D");
+    if (/^[A-Z]{1,3}$/.test(series) && /^\d{3,4}$/.test(num)) {
+      return `${state}-${rto}-${series}-${num}`;
+    }
+  }
+  return "";
+}
+
+/* 5. Strict Driver / Captain Extractor (Blocks "Booking History", Fares, Models & Addresses) */
+function isBlockedNonDriverText(line) {
+  const s = line.trim();
+  if (s.length < 3 || s.length > 36) return true;
+  if (/\d|₹|\$|@|:|\/|\\|\+|#/.test(s)) return true;
+
+  const stopRegex = /\b(booking|history|hist0ry|b00king|ride|trip|details|summary|receipt|invoice|fare|total|paid|cash|upi|wallet|completed|cancelled|upcoming|scheduled|rapido|uber|ola|redbus|auto|bike|cab|mini|sedan|prime|suv|xl|go|premier|moto|scooty|activa|jupiter|splendor|pulsar|apache|shine|access|dzire|swift|wagonr|wagon|etios|indica|xcent|aura|ertiga|innova|captain|driver|partner|pilot|vehicle|model|number|plate|pickup|pick|drop|location|station|railway|bus|stand|road|street|nagar|colony|puram|layout|cross|main|sector|phase|india|tamil|nadu|coimbatore|sulur|gandhipuram|peelamedu|ukkadam|saravanampatti|mumbai|chennai|bengaluru|help|support|rate|safety|share|track|live|otp|pin|verify|verified|you|rated|thanks|thank)\b/i;
+  if (stopRegex.test(s)) return true;
+
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length > 4) return true;
+
+  // Allow single-word names (>= 4 letters) or multi-word names with initials (e.g., "R. Karthik", "Suresh K")
+  if (words.length === 1) {
+    return !/^[A-Za-z]{4,24}$/.test(words[0]);
+  }
+  const hasMainName = words.some((w) => /^[A-Za-z]{3,}$/.test(w));
+  return !hasMainName || !words.every((w) => /^[A-Za-z]\.?$|^[A-Za-z]{2,}$/.test(w));
+}
+
+function toTitleCase(str) {
+  return str
+    .trim()
+    .split(/\s+/)
+    .map((w) => (w.length <= 2 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(" ");
+}
+
+function extractDriverName(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const vehicleHintRegex = /\b(swift|dzire|wagonr|etios|xcent|aura|ertiga|innova|indica|activa|jupiter|splendor|pulsar|apache|shine|access|auto|bike|cab|mini|sedan|prime|suv)\b/i;
+  const plateLineRegex = /\b[A-Z]{2}[\s-]?\d{2}[\s-]?[A-Z]{1,3}[\s-]?\d{3,4}\b/i;
+
+  // Pass A: Explicit labels like "Captain: Rajesh", "Driver - R. Karthik"
+  for (let i = 0; i < lines.length; i++) {
+    const labelMatch = lines[i].match(/(?:driver|captain|partner|pilot)\s*(?:name)?\s*[:\-]\s*([A-Za-z.\s]{3,34})/i);
+    if (labelMatch) {
+      const candidate = labelMatch[1].trim();
+      if (!isBlockedNonDriverText(candidate)) return toTitleCase(candidate);
+    }
+    if (/^(?:driver|captain|partner|pilot)$/i.test(lines[i]) && lines[i + 1]) {
+      if (!isBlockedNonDriverText(lines[i + 1])) return toTitleCase(lines[i + 1]);
+    }
+  }
+
+  // Pass B: Name inline with or adjacent to a star rating (e.g., "Suresh K ★ 4.9" or line above "4.8 ★")
+  for (let i = 0; i < lines.length; i++) {
+    const inlineRating = lines[i].match(/^([A-Za-z.\s]{3,30}?)\s*(?:★|☆|\*|[345][.,]\d)\b/);
+    if (inlineRating && !isBlockedNonDriverText(inlineRating[1])) {
+      return toTitleCase(inlineRating[1]);
+    }
+    if (/^(?:★|☆|\*)?\s*[345][.,]\d\b/.test(lines[i])) {
+      if (i > 0 && !isBlockedNonDriverText(lines[i - 1])) return toTitleCase(lines[i - 1]);
+      if (lines[i + 1] && !isBlockedNonDriverText(lines[i + 1])) return toTitleCase(lines[i + 1]);
+    }
+  }
+
+  // Pass C: Name directly above or below a vehicle model (Dzire, Activa, Auto) or registration plate
+  for (let i = 0; i < lines.length; i++) {
+    if (vehicleHintRegex.test(lines[i]) || plateLineRegex.test(lines[i])) {
+      const neighbors = [lines[i - 1], lines[i + 1], lines[i - 2]];
+      for (const cand of neighbors) {
+        if (cand && !isBlockedNonDriverText(cand)) {
+          return toTitleCase(cand);
         }
       }
     }
@@ -365,295 +279,209 @@ function extractAndRepairIndianPlate(rawText) {
   return "";
 }
 
-function extractLocationFromOCR(text, driverName = "", formattedPlate = "") {
-  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const plateKey = normalizePlateKey(formattedPlate);
-  const driverLower = String(driverName || "").toLowerCase();
+/* 6. Pickup / Drop Location Extractor for Live Map Pinning */
+function extractTicketLocation(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
-  const cleanPlace = (str) =>
-    String(str || "")
-      .replace(/^(?:pickup|pick\s*up|drop(?:\s*off)?|destination|from|to|location|address|boarding|starting\s*point|drop\s*location|pickup\s*location|pick-up|drop-off)\s*[:\-–—]?\s*/i, "")
-      .replace(/^[•●○▪▫■□◆◇★☆➤➔➜→\-|.,:\s]+/, "")
-      .replace(/\b\d{1,2}:\d{2}\s*(?:am|pm)?\b/gi, "")
-      .replace(/\b(?:rs\.?|inr|₹)\s*\d+(?:\.\d+)?\b/gi, "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  const isBadLocation = (cand) => {
-    if (!cand || cand.length < 4 || cand.length > 110) return true;
-    if (!/[A-Za-z]{3,}/.test(cand)) return true;
-    if (plateKey && normalizePlateKey(cand).includes(plateKey)) return true;
-    if (driverLower && driverLower.length >= 3 && cand.toLowerCase() === driverLower) return true;
-    if (/^(?:booking\s+history|ride\s+details|trip\s+details|driver\s+details|completed|cancelled|cash|upi|paytm|gpay|phonepe|total|fare|otp|pin|verified|rapido|uber|ola|auto|bike|cab|mini|prime|sedan|suv)\b/i.test(cand)) {
-      return true;
-    }
-    return false;
-  };
-
-  const labelRegex = /^(?:pickup|pick\s*up|pick-up|drop(?:\s*off)?|drop-off|destination|from|to|location|address|boarding|drop\s*location|pickup\s*location)\s*[:\-–—]?\s*(.*)$/i;
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(labelRegex);
-    if (m) {
-      const sameLine = cleanPlace(m[1]);
-      if (!isBadLocation(sameLine)) return sameLine;
-      if (i + 1 < lines.length) {
-        const nextLine = cleanPlace(lines[i + 1]);
-        if (!isBadLocation(nextLine)) return nextLine;
-      }
-    }
+    const m = lines[i].match(/(?:pickup|pick[\s-]?up|from|boarding|drop|destination|to)\s*[:\-]\s*(.{5,85})/i);
+    if (m && m[1].trim().length >= 5) return m[1].trim();
   }
 
-  const addressHintRegex = /\b(road|rd|street|st|lane|gali|marg|avenue|ave|nagar|puram|colony|sector|block|phase|vihar|enclave|extension|extn|layout|cross|main|bypass|highway|nh[-\s]?\d+|junction|jn|circle|chowk|bazaar|market|bus\s*stand|railway|metro|airport|station|hospital|school|college|university|institute|tech\s*park|mall|plaza|tower|apartments?|residency|gate|coimbatore|chennai|bengaluru|bangalore|delhi|gurugram|gurgaon|noida|mumbai|pune|hyderabad|kolkata|ahmedabad|jaipur|kochi|madurai|salem|erode|tiruppur|pollachi|sulur|arasur|gandhipuram|peelamedu|ukkadam|saravanampatti|singanallur|podanur|nasirpur|dwarka|\d{6})\b/i;
-
-  let bestAddr = "";
-  let bestScore = 0;
+  const addrKeyword = /\b(coimbatore|sulur|gandhipuram|peelamedu|ukkadam|saravanampatti|singanallur|podanur|rspuram|r\.s\.?\s*puram|pollachi|arasur|kpriet|thudiyalur|othakalmandapam|railway\s*station|airport|bus\s*stand|road|nagar|colony|puram|street|junction|bypass)\b/i;
   for (const line of lines) {
-    const cand = cleanPlace(line);
-    if (isBadLocation(cand)) continue;
-    let score = 0;
-    if (addressHintRegex.test(cand)) score += 6;
-    if (cand.includes(",")) score += 4;
-    if (/\b\d{6}\b/.test(cand)) score += 3;
-    if (cand.length >= 12) score += 2;
-    if (score > bestScore) {
-      bestScore = score;
-      bestAddr = cand;
+    if (line.length >= 6 && line.length <= 95 && addrKeyword.test(line) && !/₹|\bfare\b|\bpaid\b/i.test(line)) {
+      return line.replace(/^[^A-Za-z0-9]+/, "").trim();
     }
-  }
-
-  return bestScore >= 6 ? bestAddr : "";
-}
-
-function extractDriverName(text, formattedPlate, extractedLocation = "") {
-  return extractDriverNameWithScore(text, formattedPlate, extractedLocation).name;
-}
-
-function extractDriverNameWithScore(text, formattedPlate, extractedLocation = "") {
-  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const locLower = String(extractedLocation || "").toLowerCase();
-  const plateCompact = normalizePlateKey(formattedPlate);
-
-  const stripPlateFromLine = (line) => {
-    if (!line) return "";
-    let out = line.replace(/\b[A-Z]{2}[\s.-]*\d{1,2}[\s.-]*[A-Z]{1,3}[\s.-]*\d{3,4}\b/gi, " ");
-    if (formattedPlate) {
-      const rawTail = formattedPlate.split("-").pop().replace(/\D/g, "");
-      if (rawTail.length >= 3) {
-        out = out.replace(new RegExp(`\\b[A-Z0-9]{2}[\\s.-]*[A-Z0-9]{1,2}[\\s.-]*[A-Z0-9]{1,3}[\\s.-]*${rawTail}\\b`, "gi"), " ");
-      }
-    }
-    return out;
-  };
-
-  let best = { name: "", score: 0 };
-  const consider = (rawCandidate, score) => {
-    if (!rawCandidate || score <= best.score) return;
-    const cleaned = cleanCandidateName(stripPlateFromLine(rawCandidate), locLower);
-    if (cleaned) best = { name: cleaned, score };
-  };
-
-  const sameLineLabelRegex = /\b(?:captain|driver|partner|pilot|chauffeur|your\s+driver|your\s+captain)(?:\s+name)?(?:\s+is)?[ \t]*[:\-]?[ \t]+([A-Za-z][A-Za-z. \t]{1,32})/i;
-  const rideWithRegex = /\b(?:ride\s+with|trip\s+with|driven\s+by|captain\s+assigned)[ \t]*[:\-]?[ \t]+([A-Za-z][A-Za-z. \t]{1,32})/i;
-  for (const line of lines) {
-    const m1 = line.match(sameLineLabelRegex);
-    if (m1 && m1[1]) consider(m1[1], 100);
-    const m2 = line.match(rideWithRegex);
-    if (m2 && m2[1]) consider(m2[1], 98);
-  }
-
-  const standaloneHeadingRegex = /^(?:driver|driver\s+name|driver\s+details|driver\s+info|captain|captain\s+name|captain\s+details|your\s+driver|your\s+captain|partner|chauffeur|booked\s+with)\s*[:\-]?$/i;
-  for (let i = 0; i < lines.length; i++) {
-    if (standaloneHeadingRegex.test(lines[i])) {
-      if (i + 1 < lines.length) consider(lines[i + 1], 94);
-      if (i + 2 < lines.length) consider(lines[i + 2], 88);
-    }
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const hasRating = /\b[345][.,]\d{1,2}\b/.test(line) && !/\b(?:km|mi|rs|inr|gb|mb|am|pm)\b/i.test(line) && !/[₹$€£]/.test(line);
-    if (hasRating) {
-      const leftPart = line.replace(/\b[345][.,]\d{1,2}.*$/, "");
-      const rightPart = line.replace(/^.*?\b[345][.,]\d{1,2}[ \t★☆*()]*/, "");
-      consider(leftPart, 90);
-      consider(rightPart, 86);
-      if (i > 0) consider(lines[i - 1], 88);
-      if (i + 1 < lines.length) consider(lines[i + 1], 84);
-    }
-  }
-
-  const plateNumDigits = formattedPlate ? formattedPlate.split("-").pop().replace(/\D/g, "") : "";
-  const plateStatePrefix = plateCompact.slice(0, 4);
-  let plateIdx = -1;
-  if (plateCompact) {
-    plateIdx = lines.findIndex((l) => {
-      const key = normalizePlateKey(l);
-      if (key.includes(plateCompact)) return true;
-      if (plateNumDigits.length >= 3 && key.includes(plateNumDigits) && plateStatePrefix && key.includes(plateStatePrefix.slice(0, 2))) {
-        return true;
-      }
-      return false;
-    });
-  }
-  if (plateIdx !== -1) {
-    consider(lines[plateIdx], 85);
-    if (plateIdx - 1 >= 0) consider(lines[plateIdx - 1], 84);
-    if (plateIdx + 1 < lines.length) consider(lines[plateIdx + 1], 83);
-    if (plateIdx - 2 >= 0) consider(lines[plateIdx - 2], 80);
-    if (plateIdx + 2 < lines.length) consider(lines[plateIdx + 2], 79);
-  }
-
-  const vehicleModelRegex = /\b(maruti|suzuki|swift|dzire|wagonr|ertiga|baleno|alto|celerio|eeco|hyundai|i10|i20|aura|xcent|verna|creta|tata|indica|tiago|tigor|nexon|punch|toyota|etios|innova|glanza|bajaj|pulsar|platina|ct100|tvs|jupiter|apache|ntorq|hero|splendor|passion|glamour|honda|activa|shine|dio|unicorn|yamaha|royal\s+enfield|access|auto\s*rickshaw|e-?rickshaw|prime\s+sedan|ola\s+mini|uber\s+go|uber\s+auto)\b/i;
-  for (let i = 0; i < lines.length; i++) {
-    if (vehicleModelRegex.test(lines[i])) {
-      const withoutVehicle = lines[i].replace(vehicleModelRegex, " ");
-      consider(withoutVehicle, 77);
-      if (i - 1 >= 0) consider(lines[i - 1], 76);
-      if (i + 1 < lines.length) consider(lines[i + 1], 75);
-      if (i - 2 >= 0) consider(lines[i - 2], 72);
-    }
-  }
-
-  // Intentionally NO blind top-of-screen fallback so headers like "Booking History" never autofill
-  return best;
-}
-
-function cleanCandidateName(rawLine, excludedLocLower = "") {
-  if (!rawLine) return "";
-  const stopWords = /\b(rapido|uber|ola|redtaxi|namma|yatri|blusmart|indrive|meru|auto|bike|moto|cab|mini|prime|sedan|suv|xl|go|premier|comfort|intercity|rental|rentals|outstation|parcel|courier|delivery|white|black|silver|grey|gray|red|blue|yellow|green|maruti|suzuki|swift|dzire|wagonr|ertiga|baleno|alto|celerio|eeco|hyundai|i10|i20|aura|xcent|verna|creta|tata|indica|tiago|tigor|nexon|punch|toyota|etios|innova|glanza|bajaj|pulsar|platina|ct100|tvs|jupiter|apache|ntorq|hero|splendor|passion|glamour|honda|activa|shine|dio|unicorn|yamaha|fz|royal|enfield|access|otp|pin|pickup|pick|drop|from|to|total|cash|cashless|upi|wallet|paytm|gpay|phonepe|fare|pay|paid|payment|bill|billing|invoice|receipt|subtotal|amount|balance|refund|discount|coupon|promo|offer|offers|gst|tax|fee|charge|charges|tip|r[1li]de|r[1li]des|tr[1li]p|tr[1li]ps|b[0o][0o]k[1li]n[gq]|b[0o][0o]k[1li]n[gq]s|h[1li]st[0o]ry|h[1li]st[0o]r[1li]es|summary|det[a4][1li]ls|det[a4][1li]l|[1li]nfo|[1li]nformation|status|completed|complete|cancelled|canceled|pending|ongoing|upcoming|active|past|recent|scheduled|schedule|rebook|again|arriving|arrived|started|ended|mins|min|hrs|hr|secs|sec|away|distance|duration|time|date|today|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun|january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|am|pm|safety|shield|insurance|cover|protected|share|call|message|chat|cancel|help|support|issue|report|feedback|review|rate|download|view|more|less|show|hide|back|menu|home|work|saved|places|profile|account|settings|notifications|refer|earn|rewards|power|pass|track|live|map|route|coimbatore|chennai|bengaluru|bangalore|delhi|new|gurugram|gurgaon|noida|ghaziabad|faridabad|mumbai|pune|hyderabad|kolkata|ahmedabad|jaipur|lucknow|kochi|madurai|salem|erode|tiruppur|dwarka|nasirpur|palam|tamil|nadu|karnataka|kerala|maharashtra|uttar|pradesh|haryana|india|road|rd|street|st|lane|gali|marg|vihar|enclave|extension|extn|nagar|puram|colony|sector|block|phase|chowk|bazaar|market|park|garden|plaza|tower|metro|apartment|apartments|residency|complex|heights|floor|flat|house|building|number|no|bus|stand|station|airport|hospital|clinic|school|model|public|college|university|institute|mall|hotel|temple|mandir|bank|gate|near|opp|opposite|behind|front|verified|vaccinated|confirmed|booked|rating|ratings|captain|driver|partner|pilot|rider|chauffeur|passenger|customer|user|name|phone|mobile|email|vehicle|plate|registration|license|licence|your|my|you|the|and|for|with|via|meet|location|address|destination|emergency|police|sos)\b/i;
-
-  const segments = String(rawLine)
-    .split(/(?:[•|–—/,]+|\s+-\s+|\s{3,})/)
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  for (const seg of segments) {
-    let cleaned = seg
-      .replace(/[0-9★☆✓✔©®™()[\]{}:;'"!?@#$%^&*_+=<>~`\\-]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    cleaned = cleaned.replace(/^(?:[a-z]\s+)+/, "").replace(/(?:\s+[a-z])+$/, "").trim();
-
-    if (!cleaned || cleaned.length < 3 || cleaned.length > 28) continue;
-    if (stopWords.test(cleaned)) continue;
-    if (excludedLocLower && excludedLocLower.includes(cleaned.toLowerCase())) continue;
-
-    const words = cleaned.split(/\s+/).filter(Boolean);
-    if (words.length < 1 || words.length > 4) continue;
-
-    const allValidWordShapes = words.every((w) => /^[A-Za-z]{1,15}\.?$/.test(w));
-    const hasSubstantialWord = words.some((w) => w.replace(/\./g, "").length >= 3);
-    const totalLetters = cleaned.replace(/[^A-Za-z]/g, "").length;
-    if (!allValidWordShapes || !hasSubstantialWord || totalLetters < 3) continue;
-
-    const hasVowel = /[aeiouAEIOU]/.test(cleaned);
-    if (!hasVowel) continue;
-
-    const isUniformCase = cleaned === cleaned.toUpperCase() || cleaned === cleaned.toLowerCase();
-    if (isUniformCase) {
-      return words
-        .map((w) => {
-          const core = w.replace(/\./g, "");
-          if (core.length === 1) return w.toUpperCase();
-          return core.charAt(0).toUpperCase() + core.slice(1).toLowerCase() + (w.endsWith(".") ? "." : "");
-        })
-        .join(" ");
-    }
-
-    if (/^[A-Z]/.test(words[0])) return cleaned;
   }
 
   return "";
 }
 
-function normalizePlateKey(plateStr) {
-  return String(plateStr || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+/* 7. Main Ticket Upload Pipeline -> Auto-Fills Form + Updates Live Map & Google Maps */
+async function processRideTicketFile(file) {
+  const statusEl = document.getElementById("ocrStatus");
+  const clarityEl = document.getElementById("imageQualityBadge");
+  const previewEl = document.getElementById("ocrPreview");
+  const driverInput = document.getElementById("driverName");
+  const plateInput = document.getElementById("vehicleNumber");
+
+  // Clear stale fields immediately on new ticket upload
+  if (driverInput) driverInput.value = "";
+  if (plateInput) plateInput.value = "";
+  verifiedBookingPlate = "";
+  verifiedBookingDriver = "";
+  isPlateMismatch = false;
+  document.getElementById("mismatchBanner")?.classList.add("hidden");
+
+  if (statusEl) {
+    statusEl.classList.remove("success");
+    statusEl.innerText = "🔍 Scanning ticket & extracting driver, plate & map route...";
+  }
+
+  let objectUrl = "";
+  try {
+    const loaded = await loadImageFromFile(file);
+    objectUrl = loaded.url;
+
+    if (previewEl) {
+      previewEl.innerHTML = `<img src="${objectUrl}" alt="Uploaded Ride Ticket" style="max-height:145px; width:auto; border-radius:8px; object-fit:contain;" />`;
+    }
+
+    const worker = await getOcrWorker();
+
+    // Pass 1: Fast ride-card crop
+    const cardPass = buildProcessedCanvas(loaded.img, { cropCard: true, useOtsu: false });
+    if (clarityEl) {
+      clarityEl.innerText = cardPass.clarityPct >= 65
+        ? `✅ Clarity: ${cardPass.clarityPct}% • Sharp`
+        : `⚠️ Clarity: ${cardPass.clarityPct}% • Blurry (Verify)`;
+    }
+
+    let res = await worker.recognize(cardPass.canvas);
+    let combinedText = res.data.text || "";
+    let plate = extractIndianVehiclePlate(combinedText);
+    let driver = extractDriverName(combinedText);
+    let locationText = extractTicketLocation(combinedText);
+
+    // Pass 2: Full-screen scan if plate, driver, or location is still missing
+    if (!plate || !driver || !locationText) {
+      const fullPass = buildProcessedCanvas(loaded.img, { cropCard: false, useOtsu: false });
+      const resFull = await worker.recognize(fullPass.canvas);
+      combinedText += "\n" + (resFull.data.text || "");
+      if (!plate) plate = extractIndianVehiclePlate(combinedText);
+      if (!driver) driver = extractDriverName(combinedText);
+      if (!locationText) locationText = extractTicketLocation(combinedText);
+    }
+
+    // Pass 3: Otsu adaptive threshold pass if plate or driver is still missing
+    if (!plate || !driver) {
+      const otsuPass = buildProcessedCanvas(loaded.img, { cropCard: false, useOtsu: true });
+      const resOtsu = await worker.recognize(otsuPass.canvas);
+      combinedText += "\n" + (resOtsu.data.text || "");
+      if (!plate) plate = extractIndianVehiclePlate(combinedText);
+      if (!driver) driver = extractDriverName(combinedText);
+    }
+
+    // Auto-populate Driver & Vehicle Plate inputs
+    if (driver && driverInput) {
+      driverInput.value = driver;
+      verifiedBookingDriver = driver;
+    }
+    if (plate && plateInput) {
+      plateInput.value = plate;
+      verifiedBookingPlate = plate;
+    }
+
+    // Auto-pin extracted location onto Live Leaflet Map + Google Maps link
+    let mappedPlace = "";
+    if (locationText && typeof applyLocationFromScreenshot === "function") {
+      mappedPlace = await applyLocationFromScreenshot(locationText);
+    }
+    syncGoogleMapsTelemetryLink();
+
+    if (statusEl) {
+      if (plate && driver) {
+        statusEl.classList.add("success");
+        statusEl.innerText = `✅ Auto-Filled: ${driver} • ${plate}${mappedPlace ? " • Map Pinned" : ""}`;
+      } else if (plate || driver) {
+        statusEl.classList.add("success");
+        statusEl.innerText = `✅ Partial Auto-Fill (${plate || driver}) — verify remaining field`;
+      } else {
+        statusEl.innerText = "⚠️ Could not read plate/driver clearly. Enter details manually or upload a clearer ticket.";
+      }
+    }
+
+    if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
+    if (typeof syncShadowVaultSnapshot === "function") syncShadowVaultSnapshot();
+    if (typeof showToast === "function") {
+      showToast(
+        plate
+          ? `🎫 Ticket scanned! Plate ${plate} & live map updated.`
+          : "🎫 Ticket scanned! Please verify driver & vehicle fields."
+      );
+    }
+  } catch (err) {
+    if (statusEl) statusEl.innerText = "❌ OCR Scan failed. Please enter driver and plate manually.";
+  } finally {
+    if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
+  }
 }
 
-function checkVehicleMismatch() {
-  const currentInput = document.getElementById("vehicleNumber").value.trim();
-  const banner = document.getElementById("mismatchBanner");
-  const textEl = document.getElementById("mismatchText");
+/* 8. Keep Telemetry HUD "Google Maps ↗" Link Synced to Live Pin */
+function syncGoogleMapsTelemetryLink() {
+  const gmapsLink = document.getElementById("hudGoogleMapsLink");
+  if (!gmapsLink || typeof currentCoords === "undefined" || !currentCoords) return;
+  gmapsLink.href = `https://www.google.com/maps?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
+  gmapsLink.target = "_blank";
+  gmapsLink.rel = "noopener noreferrer";
+}
 
-  if (verifiedBookingPlate && currentInput && normalizePlateKey(currentInput) !== normalizePlateKey(verifiedBookingPlate)) {
-    isPlateMismatch = true;
-    textEl.innerText = `Booked Voucher: ${verifiedBookingPlate} vs Active Vehicle: ${currentInput.toUpperCase()}! Verify before boarding.`;
-    banner.classList.remove("hidden");
-  } else {
+/* 9. Plate Mismatch Detection & Sample/Test Buttons */
+function validatePlateAgainstBooking() {
+  const currentPlate = (document.getElementById("vehicleNumber")?.value || "").trim().toUpperCase();
+  const banner = document.getElementById("mismatchBanner");
+  if (!verifiedBookingPlate || !currentPlate) {
     isPlateMismatch = false;
-    banner.classList.add("hidden");
+    banner?.classList.add("hidden");
+    if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
+    return;
+  }
+
+  const normVerified = verifiedBookingPlate.replace(/[^A-Z0-9]/g, "");
+  const normCurrent = currentPlate.replace(/[^A-Z0-9]/g, "");
+  isPlateMismatch = normVerified !== normCurrent;
+
+  if (banner) {
+    banner.classList.toggle("hidden", !isPlateMismatch);
   }
   if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
 }
 
-function simulatePlateMismatch() {
-  if (!verifiedBookingPlate) {
-    verifiedBookingPlate = "TN-38-AB-1234";
-    verifiedBookingDriver = "Ramesh K.";
-    document.getElementById("driverName").value = "Ramesh K.";
-    updateImageQualityUI(96);
+function loadSampleTicket() {
+  const driverInput = document.getElementById("driverName");
+  const plateInput = document.getElementById("vehicleNumber");
+  const statusEl = document.getElementById("ocrStatus");
+  const clarityEl = document.getElementById("imageQualityBadge");
+  const previewEl = document.getElementById("ocrPreview");
+
+  verifiedBookingDriver = "Karthik Subramanian";
+  verifiedBookingPlate = "TN-38-CQ-4821";
+  isPlateMismatch = false;
+
+  if (driverInput) driverInput.value = verifiedBookingDriver;
+  if (plateInput) plateInput.value = verifiedBookingPlate;
+  if (clarityEl) clarityEl.innerText = "✅ Clarity: 96% • Sharp";
+  if (previewEl) {
+    previewEl.innerHTML = `<div style="padding:10px; text-align:left; font-size:12px; background:#0f172a; border-radius:8px; border:1px solid #1e293b;">
+      <div style="color:#38bdf8; font-weight:700;">RAPIDO CAPTAIN VOUCHER • VERIFIED</div>
+      <div>Captain: <strong>Karthik Subramanian</strong> (★ 4.9)</div>
+      <div>Vehicle: <strong>TN-38-CQ-4821</strong></div>
+      <div>Pickup: <strong>Gandhipuram, Coimbatore</strong></div>
+    </div>`;
   }
-  document.getElementById("vehicleNumber").value = "TN-38-XY-9988";
-  document.getElementById("ocrStatus").innerText = "⚠️ OCR detected discrepancy with booked plate!";
-  document.getElementById("ocrStatus").classList.remove("success");
-  checkVehicleMismatch();
-  if (typeof showToast === "function") {
-    showToast("⚠️ Vehicle Mismatch simulated! Booked TN-38-AB-1234 vs TN-38-XY-9988.");
+  if (statusEl) {
+    statusEl.classList.add("success");
+    statusEl.innerText = "✅ Auto-Filled: Karthik Subramanian • TN-38-CQ-4821 • Map Pinned";
   }
+
+  document.getElementById("mismatchBanner")?.classList.add("hidden");
+  if (typeof applyLocationFromScreenshot === "function") {
+    applyLocationFromScreenshot("Gandhipuram, Coimbatore, Tamil Nadu").then(syncGoogleMapsTelemetryLink);
+  }
+  if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
+  if (typeof showToast === "function") showToast("⚡ Sample ticket loaded — Driver, Plate & Live Map updated!");
 }
 
-function loadSampleRapidoBooking() {
-  const preview = document.getElementById("ocrPreview");
-  const scanLine = document.getElementById("scanLine");
-  const statusEl = document.getElementById("ocrStatus");
-
-  const canvas = document.createElement("canvas");
-  canvas.width = 280;
-  canvas.height = 180;
-  const ctx = canvas.getContext("2d");
-
-  ctx.fillStyle = "#111827";
-  ctx.fillRect(0, 0, 280, 180);
-  ctx.fillStyle = "#facc15";
-  ctx.fillRect(0, 0, 280, 42);
-  ctx.fillStyle = "#0f172a";
-  ctx.font = "bold 20px Inter, sans-serif";
-  ctx.fillText("rapido", 104, 28);
-
-  ctx.fillStyle = "#f8fafc";
-  ctx.font = "bold 14px Inter, sans-serif";
-  ctx.fillText("Captain: Ramesh K.", 20, 76);
-  ctx.fillStyle = "#38bdf8";
-  ctx.font = "bold 16px monospace";
-  ctx.fillText("TN-38-AB-1234", 20, 106);
-  ctx.fillStyle = "#94a3b8";
-  ctx.font = "12px Inter, sans-serif";
-  ctx.fillText("Drop: Gandhipuram, Coimbatore", 20, 138);
-  ctx.fillText("PIN: 4829 • Confirmed", 20, 162);
-
-  preview.innerHTML = "";
-  preview.appendChild(canvas);
-
-  scanLine.classList.remove("hidden");
-  statusEl.classList.remove("success");
-  statusEl.innerText = "Scanning Rapido booking voucher...";
-
-  setTimeout(async () => {
-    scanLine.classList.add("hidden");
-    verifiedBookingDriver = "Ramesh K.";
-    verifiedBookingPlate = "TN-38-AB-1234";
-    document.getElementById("driverName").value = verifiedBookingDriver;
-    document.getElementById("vehicleNumber").value = verifiedBookingPlate;
-    updateImageQualityUI(96);
-    checkVehicleMismatch();
-    if (typeof applyLocationFromScreenshot === "function") {
-      await applyLocationFromScreenshot("Gandhipuram, Coimbatore");
-    }
-    statusEl.classList.add("success");
-    statusEl.innerText = "✅ Verified: Ramesh K. • TN-38-AB-1234 • 📍 Gandhipuram";
-    if (typeof showToast === "function") {
-      showToast("📷 Sample voucher verified & map updated to Gandhipuram, Coimbatore!");
-    }
-  }, 900);
+function simulatePlateMismatch() {
+  if (!verifiedBookingPlate) {
+    verifiedBookingPlate = "TN-38-CQ-4821";
+    verifiedBookingDriver = "Karthik Subramanian";
+    const driverInput = document.getElementById("driverName");
+    if (driverInput && !driverInput.value) driverInput.value = verifiedBookingDriver;
+  }
+  const plateInput = document.getElementById("vehicleNumber");
+  if (plateInput) plateInput.value = "TN-38-AZ-9910";
+  validatePlateAgainstBooking();
+  if (typeof showToast === "function") showToast("🚨 Vehicle Plate Mismatch Simulated!");
 }
