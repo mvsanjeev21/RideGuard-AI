@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>RideGuard AI — Autonomous Women's Ride Safety (Coimbatore Edition)</title>
+  <title>RideGuard AI — Global Road-Routed Safety &amp; Police Radar</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
@@ -20,21 +20,22 @@
       --emerald: #34d399;
       --amber: #f59e0b;
       --red: #ef4444;
+      --purple: #a855f7;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Inter', system-ui, sans-serif; }
     body { background: radial-gradient(circle at top right, #13223f, var(--bg-main) 60%); color: var(--text-main); min-height: 100vh; overflow-x: hidden; }
     .hidden { display: none !important; }
 
-    /* ===================================================================== */
-    /* 1. COMPUTE 50 SETUP / LOGIN VIEW + AUTOMATIC GPS LOCATION             */
-    /* ===================================================================== */
+    /* =================================================================== */
+    /* 1. LOGIN / SETUP VIEW                                               */
+    /* =================================================================== */
     .login-wrapper {
       min-height: 100vh; display: flex; align-items: center; justify-content: center;
       padding: 24px 16px; background: radial-gradient(circle at 50% 0%, rgba(37, 99, 235, 0.22), #070c16 68%);
     }
     .login-card {
-      width: 100%; max-width: 550px; background: rgba(17, 25, 44, 0.94); backdrop-filter: blur(18px);
+      width: 100%; max-width: 560px; background: rgba(17, 25, 44, 0.94); backdrop-filter: blur(18px);
       border: 1px solid rgba(148, 163, 184, 0.22); border-radius: 20px; padding: 28px 30px;
       box-shadow: 0 25px 60px rgba(0, 0, 0, 0.65);
     }
@@ -50,7 +51,6 @@
     .compute-banner .b-icon { font-size: 18px; margin-top: 1px; }
     .compute-banner .b-title { font-size: 13px; font-weight: 700; color: #60a5fa; margin-bottom: 3px; }
     .compute-banner .b-desc { font-size: 12px; color: #cbd5e1; line-height: 1.45; }
-    .compute-banner code { background: rgba(15, 23, 42, 0.7); padding: 1px 5px; border-radius: 4px; color: #93c5fd; font-size: 11px; }
 
     .sec-title { font-size: 13px; font-weight: 700; color: #f1f5f9; display: flex; align-items: center; gap: 7px; margin: 14px 0 8px; }
     .sec-title.green { color: var(--emerald); margin-top: 18px; }
@@ -59,660 +59,50 @@
     label { display: block; font-size: 12px; color: #cbd5e1; margin: 10px 0 5px; font-weight: 500; }
     input[type="text"], input[type="tel"], input[type="email"] {
       width: 100%; padding: 11px 14px; border-radius: 10px; border: 1px solid var(--border);
-      background: var(--bg-input); color: var(--text-main); font-size: 13px; outline: none; transition: border-color 0.2s;
+      background: var(--bg-input); color: var(--text-main); font-size: 13px; outline: none;
     }
     input:focus { border-color: var(--blue); }
 
-    .loc-input-row { display: flex; gap: 8px; align-items: center; }
+    .loc-input-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .loc-input-row input { flex: 1; min-width: 180px; }
     .loc-refresh-btn {
-      background: rgba(34, 211, 238, 0.14); border: 1px solid rgba(34, 211, 238, 0.45);
-      color: var(--cyan); padding: 10px 13px; border-radius: 10px; cursor: pointer; font-size: 12px;
-      font-weight: 700; transition: 0.2s; flex-shrink: 0; white-space: nowrap;
+      background: rgba(34, 211, 238, 0.12); border: 1px solid rgba(34, 211, 238, 0.4);
+      color: var(--cyan); padding: 10px 12px; border-radius: 10px; font-size: 12px; font-weight: 600;
+      cursor: pointer; white-space: nowrap; transition: 0.2s;
     }
-    .loc-refresh-btn:hover { background: rgba(34, 211, 238, 0.25); color: #fff; }
-    .loc-auto-status {
-      font-size: 11.5px; color: #93c5fd; margin-top: 6px; display: flex; align-items: center; gap: 6px;
-      line-height: 1.4;
-    }
+    .loc-refresh-btn:hover { background: rgba(34, 211, 238, 0.22); color: #fff; }
+    .loc-auto-status { font-size: 11px; color: #38bdf8; margin-top: 5px; display: flex; align-items: center; gap: 6px; }
     .loc-auto-status.ok { color: #34d399; }
     .loc-auto-status.warn { color: #fbbf24; }
 
     .btn {
       width: 100%; padding: 12px 16px; border-radius: 10px; font-size: 13px; font-weight: 600;
       cursor: pointer; transition: 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
-      text-decoration: none;
     }
-    .btn-save-grad { background: linear-gradient(90deg, #0ea5e9, #2563eb); color: #fff; border: none; margin-top: 20px; padding: 13px; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35); }
+    .btn-save-grad { background: linear-gradient(90deg, #0ea5e9, #2563eb); color: #fff; border: none; margin-top: 18px; padding: 13px; box-shadow: 0 8px 24px rgba(37, 99, 235, 0.35); }
     .btn-save-grad:hover { opacity: 0.94; }
     .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); margin-top: 10px; }
     .btn-ghost:hover { color: #fff; border-color: var(--blue); }
 
-    /* ===================================================================== */
-    /* 2. MAIN DASHBOARD SHELL & SAFETY MODULES                              */
-    /* ===================================================================== */
+    /* =================================================================== */
+    /* 2. MAIN DASHBOARD SHELL                                             */
+    /* =================================================================== */
     .brand { display: flex; align-items: center; gap: 10px; font-size: 24px; font-weight: 700; margin-bottom: 6px; }
     .brand span { color: var(--blue); }
-    .version-tag {
-      font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
-      background: rgba(34, 211, 238, 0.14); color: var(--cyan); border: 1px solid rgba(34, 211, 238, 0.35);
-    }
-    .dashboard { max-width: 1360px; margin: 0 auto; padding: 18px 20px 30px; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+    .dashboard { max-width: 1320px; margin: 0 auto; padding: 20px; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 18px; }
     .top-left { display: flex; flex-direction: column; gap: 8px; }
-    .pill-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .status-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
     .status-pill {
-      display: inline-flex; align-items: center; gap: 8px; padding: 6px 13px; border-radius: 8px;
-      font-size: 11px; font-weight: 700; letter-spacing: 0.4px; width: fit-content;
+      display: inline-flex; align-items: center; gap: 8px; padding: 7px 14px; border-radius: 8px;
+      font-size: 12px; font-weight: 600; letter-spacing: 0.4px; width: fit-content;
       background: rgba(16, 185, 129, 0.12); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);
     }
-    .status-pill.danger { background: rgba(239, 68, 68, 0.15); color: #f87171; border-color: rgba(239, 68, 68, 0.5); }
+    .status-pill.danger { background: rgba(239, 68, 68, 0.18); color: #f87171; border-color: rgba(239, 68, 68, 0.65); }
     .vault-pill {
-      display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 8px;
-      font-size: 11px; font-weight: 600; background: rgba(59, 130, 246, 0.12);
-      color: #93c5fd; border: 1px solid rgba(59, 130, 246, 0.35);
+      display: inline-flex; align-items: center; gap: 6px; padding: 7px 11px; border-radius: 8px;
+      font-size: 11px; font-weight: 600; background: rgba(168, 85, 247, 0.14); color: #d8b4fe;
+      border: 1px solid rgba(168, 85, 247, 0.35);
     }
     .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-    .icon-btn { background: var(--bg-card); border: 1px solid var(--border); color: var(--text-muted); padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500; }
-    .icon-btn:hover { color: #fff; border-color: var(--blue); }
-
-    /* 2-Column Main Grid */
-    .main-grid { display: grid; grid-template-columns: 360px 1fr; gap: 18px; align-items: start; }
-    .left-col { display: flex; flex-direction: column; gap: 16px; }
-    .panel { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; padding: 18px; }
-
-    /* Left Column: OCR Scanner + Image Quality + Mismatch Detection */
-    .panel-header { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 12px; }
-    .panel-title { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #e2e8f0; display: flex; align-items: center; gap: 7px; }
-    .header-actions { display: flex; gap: 6px; }
-    .mini-btn { background: rgba(34, 211, 238, 0.12); color: var(--cyan); border: 1px solid rgba(34, 211, 238, 0.35); padding: 5px 9px; border-radius: 6px; font-size: 11px; font-weight: 600; cursor: pointer; }
-    .mini-btn:hover { background: rgba(34, 211, 238, 0.22); }
-    .mini-btn.warn { background: rgba(245, 158, 11, 0.14); color: #fbbf24; border-color: rgba(245, 158, 11, 0.4); }
-    .mini-btn.warn:hover { background: rgba(245, 158, 11, 0.25); }
-
-    .ocr-box {
-      position: relative; height: 175px; border-radius: 12px; border: 1px dashed rgba(148, 163, 184, 0.35);
-      background: #0b1222; display: flex; flex-direction: column; align-items: center; justify-content: center;
-      overflow: hidden; cursor: pointer; margin-bottom: 10px; text-align: center; padding: 12px;
-    }
-    .ocr-box img, .ocr-box canvas { max-width: 100%; max-height: 100%; border-radius: 8px; object-fit: contain; }
-    .ocr-placeholder { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
-    .scan-line { position: absolute; left: 0; right: 0; height: 3px; background: var(--cyan); box-shadow: 0 0 16px 4px rgba(34, 211, 238, 0.8); animation: scan 1.6s linear infinite; }
-    @keyframes scan { 0% { top: 5%; } 50% { top: 92%; } 100% { top: 5%; } }
-
-    .quality-bar {
-      display: flex; justify-content: space-between; align-items: center; padding: 6px 10px;
-      border-radius: 8px; background: #0b1222; border: 1px solid var(--border); font-size: 11px; margin-bottom: 8px;
-    }
-    .q-badge { font-weight: 700; color: var(--text-muted); }
-    .q-badge.good { color: #34d399; }
-    .q-badge.low { color: #fbbf24; }
-
-    .ocr-status { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
-    .ocr-status.success { color: #34d399; font-weight: 500; }
-
-    .mismatch-box {
-      margin-top: 12px; padding: 11px 12px; border-radius: 10px;
-      background: rgba(127, 29, 29, 0.85); border: 1px solid rgba(239, 68, 68, 0.8);
-      font-size: 11.5px; color: #fecaca; line-height: 1.45;
-    }
-    .mismatch-box strong { color: #fff; display: block; margin-bottom: 3px; font-size: 12px; }
-    .mismatch-box button {
-      margin-top: 8px; width: 100%; background: var(--red); color: #fff; border: none;
-      padding: 7px 10px; border-radius: 7px; font-size: 11.5px; font-weight: 700; cursor: pointer;
-    }
-
-    /* AI Safety Analytics Card */
-    .risk-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
-    .risk-score-num { font-size: 22px; font-weight: 800; color: #34d399; }
-    .risk-score-num.mod { color: #fbbf24; }
-    .risk-score-num.high { color: #f87171; }
-    .risk-pill {
-      padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
-      background: rgba(16, 185, 129, 0.16); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.45);
-    }
-    .risk-pill.mod { background: rgba(245, 158, 11, 0.16); color: #fbbf24; border-color: rgba(245, 158, 11, 0.45); }
-    .risk-pill.high { background: rgba(239, 68, 68, 0.18); color: #f87171; border-color: rgba(239, 68, 68, 0.55); }
-    .risk-meter { width: 100%; height: 7px; background: #0b1222; border-radius: 999px; overflow: hidden; margin-bottom: 12px; border: 1px solid var(--border); }
-    .risk-fill { height: 100%; width: 95%; background: linear-gradient(90deg, #10b981, #22d3ee); transition: width 0.35s ease, background 0.35s ease; }
-    .risk-list { list-style: none; display: flex; flex-direction: column; gap: 6px; font-size: 11.5px; color: #cbd5e1; }
-    .risk-list li { display: flex; align-items: center; gap: 7px; }
-    .risk-list li.warn-item { color: #fca5a5; font-weight: 600; }
-
-    /* Right Column: Coimbatore Map + Display-Only Police Coverage Panel + Controls */
-    .right-col { display: flex; flex-direction: column; gap: 16px; }
-    .map-wrapper { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--border); height: 420px; }
-    #map { width: 100%; height: 100%; z-index: 1; background: #0f172a; }
-
-    .map-toolbar {
-      position: absolute; top: 10px; right: 10px; z-index: 400; display: flex; flex-wrap: wrap;
-      justify-content: flex-end; gap: 6px; max-width: 88%;
-    }
-    .map-chip {
-      background: rgba(11, 17, 32, 0.92); border: 1px solid var(--border); color: #e2e8f0;
-      padding: 6px 9px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; backdrop-filter: blur(6px);
-    }
-    .map-chip:hover { border-color: var(--cyan); color: #fff; }
-    .map-chip.active { border-color: var(--cyan); color: var(--cyan); background: rgba(34, 211, 238, 0.16); }
-
-    /* Floating Live GPS Telemetry HUD */
-    .gps-hud {
-      position: absolute; bottom: 12px; left: 12px; z-index: 400; width: 295px;
-      background: rgba(11, 17, 32, 0.92); backdrop-filter: blur(10px);
-      border: 1px solid rgba(56, 189, 248, 0.38); border-radius: 12px; padding: 10px 12px;
-      font-size: 11px; color: #e2e8f0; box-shadow: 0 10px 28px rgba(0,0,0,0.55);
-    }
-    .hud-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
-    .sig-badge { padding: 2px 7px; border-radius: 6px; font-size: 10px; font-weight: 700; background: rgba(16, 185, 129, 0.2); color: #34d399; }
-    .sig-badge.fair { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
-    .sig-badge.weak { background: rgba(239, 68, 68, 0.2); color: #f87171; }
-    .hud-addr { color: #93c5fd; font-weight: 500; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 8px; color: var(--text-muted); }
-    .hud-grid strong { color: #f8fafc; }
-
-    /* Journey History Drawer Overlay on Map */
-    .journey-drawer {
-      position: absolute; bottom: 12px; right: 12px; z-index: 400; width: 270px; max-height: 175px;
-      background: rgba(11, 17, 32, 0.92); backdrop-filter: blur(10px);
-      border: 1px solid rgba(148, 163, 184, 0.3); border-radius: 12px; padding: 10px 12px;
-      font-size: 11px; color: #e2e8f0; display: flex; flex-direction: column;
-      box-shadow: 0 10px 28px rgba(0,0,0,0.55);
-    }
-    .journey-head { display: flex; justify-content: space-between; align-items: center; font-weight: 700; color: var(--cyan); margin-bottom: 6px; }
-    .journey-entries { overflow-y: auto; display: flex; flex-direction: column; gap: 5px; font-family: monospace; font-size: 10.5px; color: #cbd5e1; }
-    .journey-entries div { padding-bottom: 4px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); }
-
-    /* Off-Route & Unusual Stop Safety Check-In Banner */
-    .safety-banner {
-      position: absolute; top: 54px; left: 50%; transform: translateX(-50%); z-index: 450;
-      width: 92%; max-width: 470px; background: rgba(127, 29, 29, 0.96); border: 1px solid var(--red);
-      border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px;
-      box-shadow: 0 12px 30px rgba(0,0,0,0.7);
-    }
-    .safety-banner.amber { background: rgba(120, 53, 15, 0.96); border-color: var(--amber); }
-    .safety-banner button { background: var(--green); color: #052e16; border: none; padding: 8px 13px; border-radius: 8px; font-size: 12px; font-weight: 800; cursor: pointer; white-space: nowrap; }
-
-    /* ===================================================================== */
-    /* 3. DISPLAY-ONLY COIMBATORE POLICE STATION COVERAGE PANEL              */
-    /* ===================================================================== */
-    .police-coverage-panel {
-      background: linear-gradient(145deg, rgba(19, 28, 49, 0.98), rgba(15, 23, 42, 0.98));
-      border: 1px solid rgba(56, 189, 248, 0.35); border-radius: 16px; padding: 16px 18px;
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45); transition: border-color 0.35s ease, box-shadow 0.35s ease;
-    }
-    .police-coverage-panel.station-switched {
-      border-color: #22d3ee; box-shadow: 0 0 24px rgba(34, 211, 238, 0.32);
-    }
-    .pc-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-    .pc-title { font-size: 13px; font-weight: 800; letter-spacing: 0.5px; color: #f8fafc; display: flex; align-items: center; gap: 8px; }
-    .pc-badges-wrap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-    .pc-radar-badge {
-      display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px;
-      font-size: 10.5px; font-weight: 700; background: rgba(16, 185, 129, 0.16); color: #34d399;
-      border: 1px solid rgba(16, 185, 129, 0.45);
-    }
-    .pc-display-only-badge {
-      display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px;
-      font-size: 10.5px; font-weight: 700; background: rgba(245, 158, 11, 0.15); color: #fbbf24;
-      border: 1px solid rgba(245, 158, 11, 0.45);
-    }
-    .pc-radar-dot { width: 7px; height: 7px; border-radius: 50%; background: #10b981; animation: pulse 1.6s infinite; }
-
-    .pc-active-grid {
-      display: grid; grid-template-columns: 1.35fr 1fr; gap: 14px; align-items: center;
-      background: #0b1222; border: 1px solid rgba(148, 163, 184, 0.2); border-radius: 12px; padding: 14px;
-    }
-    .pc-station-name { font-size: 17px; font-weight: 800; color: #38bdf8; margin-bottom: 4px; }
-    .pc-zone { font-size: 12px; color: #cbd5e1; margin-bottom: 8px; }
-    .pc-metrics { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; }
-    .pc-chip {
-      background: rgba(30, 41, 59, 0.9); border: 1px solid var(--border); padding: 4px 9px;
-      border-radius: 6px; color: #e2e8f0; font-weight: 600;
-    }
-
-    .pc-readonly-box {
-      display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 5px;
-      border-left: 1px solid rgba(148, 163, 184, 0.15); padding-left: 14px;
-    }
-    .pc-phone-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); font-weight: 700; }
-    .pc-phone-num {
-      font-family: 'Courier New', monospace; font-size: 21px; font-weight: 800; color: #34d399;
-      letter-spacing: 0.6px; user-select: all; cursor: default;
-    }
-    .pc-readonly-note {
-      font-size: 11px; color: #fbbf24; font-weight: 600; background: rgba(245, 158, 11, 0.1);
-      border: 1px solid rgba(245, 158, 11, 0.3); padding: 4px 9px; border-radius: 6px;
-    }
-
-    .pc-summary-bar {
-      margin-top: 10px; font-size: 11px; color: #94a3b8; display: flex; justify-content: space-between;
-      align-items: center; flex-wrap: wrap; gap: 6px;
-    }
-    .pc-nearby-grid {
-      margin-top: 10px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
-    }
-    .pc-mini-card {
-      background: rgba(11, 18, 34, 0.78); border: 1px solid var(--border); border-radius: 9px;
-      padding: 8px 10px; font-size: 11px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px;
-    }
-    .pc-mini-card.nearest { border-color: rgba(52, 211, 153, 0.55); background: rgba(16, 185, 129, 0.08); }
-    .pc-mini-name { font-weight: 700; color: #e2e8f0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .pc-mini-meta { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: var(--text-muted); gap: 4px; }
-    .pc-mini-tel { color: #93c5fd; font-family: monospace; font-weight: 700; font-size: 11px; user-select: all; cursor: default; }
-
-    /* Bottom Deck */
-    .bottom-deck { display: grid; grid-template-columns: 1fr 275px; gap: 16px; }
-    .controls-stack { display: flex; flex-direction: column; gap: 10px; justify-content: center; }
-    .btn-safe { background: rgba(16, 185, 129, 0.16); color: #ecfdf5; border: 1px solid rgba(16, 185, 129, 0.65); }
-    .btn-safe:hover { background: rgba(16, 185, 129, 0.28); }
-    .btn-sos { background: rgba(239, 68, 68, 0.18); color: #fef2f2; border: 1px solid rgba(239, 68, 68, 0.75); }
-    .btn-sos:hover { background: rgba(239, 68, 68, 0.32); }
-    .btn-purge { background: rgba(59, 130, 246, 0.16); color: #eff6ff; border: 1px solid rgba(59, 130, 246, 0.65); }
-    .btn-purge:hover { background: rgba(59, 130, 246, 0.28); }
-
-    .heartbeat-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 8px; }
-    .hb-row { display: flex; justify-content: space-between; align-items: center; }
-    .hb-title { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: #e2e8f0; }
-    .hb-status { font-size: 12px; font-weight: 700; color: #34d399; }
-    .hb-status.offline { color: #f87171; }
-    .hb-status.amber { color: #fbbf24; }
-    .pulse-wrap { display: flex; justify-content: center; align-items: center; margin: 4px 0; }
-    .pulse-dot { width: 13px; height: 13px; border-radius: 50%; background: var(--green); animation: pulse 1.8s infinite; }
-    .pulse-dot.offline { background: var(--red); box-shadow: 0 0 12px var(--red); animation: none; }
-    @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); } 70% { box-shadow: 0 0 0 13px rgba(16, 185, 129, 0); } 100% { box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); } }
-    .hb-meta { font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; gap: 6px; }
-    .vault-sync-box {
-      background: #0b1222; border: 1px solid rgba(56, 189, 248, 0.28); border-radius: 8px;
-      padding: 7px 9px; font-size: 10.5px; color: #cbd5e1; line-height: 1.4;
-    }
-    .vault-sync-box.frozen { border-color: rgba(239, 68, 68, 0.7); background: rgba(127, 29, 29, 0.28); color: #fecaca; }
-    .vault-sync-head { display: flex; justify-content: space-between; font-weight: 700; color: #38bdf8; margin-bottom: 2px; }
-    .vault-sync-box.frozen .vault-sync-head { color: #f87171; }
-    .hb-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-    .btn-test-off { width: 100%; background: rgba(239, 68, 68, 0.14); color: #fca5a5; border: 1px solid rgba(239, 68, 68, 0.45); padding: 6px 4px; border-radius: 7px; font-size: 10.5px; font-weight: 700; cursor: pointer; }
-    .btn-test-net { width: 100%; background: rgba(245, 158, 11, 0.14); color: #fcd34d; border: 1px solid rgba(245, 158, 11, 0.45); padding: 6px 4px; border-radius: 7px; font-size: 10.5px; font-weight: 700; cursor: pointer; }
-
-    /* Modals (Trusted Contacts SOS & Safety Audit Report) */
-    .modal-overlay { position: fixed; inset: 0; background: rgba(2, 6, 23, 0.84); backdrop-filter: blur(7px); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 18px; overflow-y: auto; }
-    .modal-card { width: 100%; max-width: 520px; background: var(--bg-card); border: 1px solid rgba(239, 68, 68, 0.65); border-radius: 16px; padding: 22px; box-shadow: 0 24px 60px rgba(0,0,0,0.75); }
-    .modal-card.report { border-color: rgba(56, 189, 248, 0.55); }
-    .payload-box { background: #090f1d; border: 1px solid var(--border); border-radius: 10px; padding: 12px; font-family: monospace; font-size: 11.5px; color: #e2e8f0; white-space: pre-wrap; margin: 12px 0; line-height: 1.5; max-height: 195px; overflow-y: auto; }
-    .delivery-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
-    .delivery-item {
-      background: #0b1222; border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px;
-      display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 12px;
-    }
-    .deliv-badge { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px; }
-    .deliv-badge.sending { background: rgba(59, 130, 246, 0.2); color: #93c5fd; }
-    .deliv-badge.retry { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
-    .deliv-badge.ok { background: rgba(16, 185, 129, 0.2); color: #34d399; }
-    .deliv-badge.queued { background: rgba(148, 163, 184, 0.2); color: #cbd5e1; }
-    .dispatch-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 10px; }
-
-    .report-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
-    .stat-tile { background: #0b1222; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
-    .stat-tile span { font-size: 11px; color: var(--text-muted); display: block; }
-    .stat-tile strong { font-size: 16px; color: #f8fafc; margin-top: 2px; display: block; }
-
-    .toast { position: fixed; bottom: 20px; right: 20px; z-index: 10000; background: #1e293b; border: 1px solid var(--blue); color: #fff; padding: 12px 18px; border-radius: 10px; font-size: 13px; max-width: 90vw; box-shadow: 0 12px 30px rgba(0,0,0,0.5); }
-
-    @media (max-width: 1024px) {
-      .main-grid, .bottom-deck { grid-template-columns: 1fr; }
-      .pc-nearby-grid { grid-template-columns: repeat(2, 1fr); }
-    }
-    @media (max-width: 640px) {
-      .grid-2, .pc-active-grid { grid-template-columns: 1fr; }
-      .pc-readonly-box { align-items: flex-start; border-left: none; border-top: 1px solid rgba(148, 163, 184, 0.15); padding-left: 0; padding-top: 10px; }
-      .pc-nearby-grid { grid-template-columns: 1fr; }
-      .gps-hud, .journey-drawer { width: calc(100% - 24px); }
-    }
-  </style>
-
-<!-- Boosthis Performance Monitoring -->
-<script defer src="https://www.boosthis.com/kit.js" data-key="bksend_28102a676713be7e8c252c487deae65c56187b20c18168044498d23dd1777685" data-install="0b6adc19-8959-4614-889a-0c287f067d3c" data-project="RideGuard-AI" onerror="console.error('[boosthis] Boosthis did not load: '+this.src+' never arrived, so nothing is measuring. Check the address, the network, and any Content-Security-Policy.')"></script>
-
-</head>
-<body>
-
-  <!-- ===================================================================== -->
-  <!-- 1. COMPUTE 50 SETUP / LOGIN VIEW + AUTOMATIC GPS LOCATION ACCESS      -->
-  <!-- ===================================================================== -->
-  <div id="loginView" class="login-wrapper">
-    <div class="login-card">
-      <div class="login-header">
-        <h2>🛡️ RideGuard <span>AI</span></h2>
-        <p>Autonomous Women's Ride Safety &amp; Privacy Web App</p>
-      </div>
-
-      <div class="compute-banner">
-        <div class="b-icon">🛡️</div>
-        <div>
-          <div class="b-title">COMPUTE 50 Hackathon Prototype • Coimbatore Corridor</div>
-          <div class="b-desc">
-            Your rider profile is encrypted in browser storage (<code>localStorage</code>) with automatic GPS radar calibration. Emergency alerts are dispatched <strong>only</strong> to your personal contacts.
-          </div>
-        </div>
-      </div>
-
-      <div class="sec-title">👤 Rider Identity &amp; Live Starting Location</div>
-      <label for="userName">Full Name *</label>
-      <input type="text" id="userName" placeholder="e.g., Ananya Sharma" />
-
-      <div class="grid-2">
-        <div>
-          <label for="userEmail">Email Address *</label>
-          <input type="email" id="userEmail" placeholder="ananya@example.com" />
-        </div>
-        <div>
-          <label for="userPhone">Mobile Number *</label>
-          <input type="tel" id="userPhone" placeholder="+91 98765 43210" />
-        </div>
-      </div>
-
-      <!-- Automatic Location Detection Field -->
-      <label for="userLocation">Current Location (Auto-Detected)</label>
-      <div class="loc-input-row">
-        <input type="text" id="userLocation" placeholder="Detecting your location in Coimbatore..." />
-        <button type="button" class="loc-refresh-btn" title="Refresh GPS Location" onclick="autoDetectLoginLocation()">📍 Detect GPS</button>
-      </div>
-      <div id="locationAutoStatus" class="loc-auto-status">🛰️ Automatically accessing your GPS location...</div>
-
-      <div class="sec-title green">📞 Emergency Contacts (SMS &amp; WhatsApp Recipients)</div>
-      <label>Primary Emergency Contact (WhatsApp / Phone) *</label>
-      <div class="grid-2">
-        <input type="text" id="emName1" placeholder="Parent / Partner Name" />
-        <input type="tel" id="emPhone1" placeholder="+91 98765 00001" />
-      </div>
-
-      <label>Secondary Emergency Contact (Optional)</label>
-      <div class="grid-2">
-        <input type="text" id="emName2" placeholder="Friend / Relative" />
-        <input type="tel" id="emPhone2" placeholder="+91 98765 00002" />
-      </div>
-
-      <button class="btn btn-save-grad" onclick="saveProfile()">🔒 Save Profile &amp; Open Safety Dashboard</button>
-      <button class="btn btn-ghost" onclick="quickDemoLogin()">⚡ Quick Fill Demo Profile</button>
-    </div>
-  </div>
-
-  <!-- ===================================================================== -->
-  <!-- 2. MAIN DASHBOARD VIEW (COIMBATORE RADAR & DISPLAY-ONLY POLICE PANEL) -->
-  <!-- ===================================================================== -->
-  <div id="appView" class="dashboard hidden">
-    <div class="topbar">
-      <div class="top-left">
-        <div class="brand">🛡️ RideGuard <span>AI</span> <span class="version-tag">COIMBATORE RADAR</span></div>
-        <div class="pill-row">
-          <div id="sessionBadge" class="status-pill">🛡️ STANDBY — READY FOR SAFE RIDE</div>
-          <div id="vaultBadge" class="vault-pill">🔐 AES-256 Encrypted Vault • Contacts-Only SOS</div>
-        </div>
-      </div>
-      <div class="top-actions">
-        <span id="welcomeUser" style="font-size:12px; color:var(--text-muted);"></span>
-        <button class="icon-btn" onclick="openSafetyReport(false)">📊 Safety Report</button>
-        <button class="icon-btn" onclick="logoutProfile()">Switch Profile</button>
-      </div>
-    </div>
-
-    <div class="main-grid">
-      <!-- LEFT COLUMN: AI OCR VERIFICATION + AI SAFETY ANALYTICS -->
-      <div class="left-col">
-        <!-- MODULE 1: ADVANCED AI RIDE VERIFICATION (ocr.js) -->
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">📷 AI OCR SCANNER</div>
-            <div class="header-actions">
-              <button class="mini-btn" onclick="loadSampleRapidoBooking()">Load Sample</button>
-              <button class="mini-btn warn" onclick="simulatePlateMismatch()">Test Mismatch</button>
-            </div>
-          </div>
-
-          <input type="file" id="screenshotInput" accept="image/*" class="hidden" onchange="handleOCRUpload(event)" />
-          <div class="ocr-box" onclick="document.getElementById('screenshotInput').click()">
-            <div id="ocrPreview" class="ocr-placeholder">
-              <strong>Upload Rapido / Uber / Ola Screenshot</strong><br />
-              Click to browse or tap <em>Load Sample</em>
-            </div>
-            <div id="scanLine" class="scan-line hidden"></div>
-          </div>
-
-          <div class="quality-bar">
-            <span style="color:var(--text-muted);">🖼️ Image Clarity:</span>
-            <span id="imageQualityBadge" class="q-badge">Awaiting Scan</span>
-          </div>
-
-          <label for="driverName">Driver / Captain</label>
-          <input type="text" id="driverName" placeholder="Auto-filled by AI OCR" oninput="evaluateRiskAnalytics()" />
-
-          <label for="vehicleNumber">Vehicle Registration Plate</label>
-          <input type="text" id="vehicleNumber" placeholder="e.g., TN-38-AB-1234" oninput="checkVehicleMismatch()" />
-
-          <div id="mismatchBanner" class="mismatch-box hidden">
-            <strong>⚠️ VEHICLE MISMATCH DETECTED!</strong>
-            <span id="mismatchText">Booked plate does not match active plate.</span>
-            <button onclick="triggerManualSOS('VEHICLE REGISTRATION MISMATCH')">🚨 Alert Trusted Contacts (Mismatch SOS)</button>
-          </div>
-
-          <div id="ocrStatus" class="ocr-status">Waiting for booking screenshot...</div>
-        </div>
-
-        <!-- MODULE 5: AI-BASED SAFETY ANALYTICS -->
-        <div class="panel">
-          <div class="panel-header">
-            <div class="panel-title">🧠 AI SAFETY ANALYTICS</div>
-            <span id="riskLevelBadge" class="risk-pill">LOW RISK</span>
-          </div>
-          <div class="risk-header">
-            <div>
-              <div style="font-size:11px; color:var(--text-muted);">Live Journey Safety Score</div>
-              <div id="riskScoreValue" class="risk-score-num">95 / 100</div>
-            </div>
-            <div style="text-align:right; font-size:11px; color:var(--text-muted);">
-              Pattern Engine<br /><strong style="color:#e2e8f0;">Active Watch</strong>
-            </div>
-          </div>
-          <div class="risk-meter">
-            <div id="riskMeterFill" class="risk-fill" style="width:95%;"></div>
-          </div>
-          <ul id="riskIndicators" class="risk-list">
-            <li>✅ Zero-Retention Encrypted Session Active</li>
-            <li>🚓 Coimbatore Police Radar (Display Only)</li>
-            <li>⏳ Awaiting Ride Voucher Verification</li>
-          </ul>
-        </div>
-      </div>
-
-      <!-- RIGHT COLUMN: COIMBATORE MAP + DISPLAY-ONLY POLICE COVERAGE + CONTROLS -->
-      <div class="right-col">
-        <div class="map-wrapper">
-          <div id="map"></div>
-
-          <div class="map-toolbar">
-            <button id="gpsModeBtn" class="map-chip active" onclick="toggleGpsMode()">📍 Mode: Demo</button>
-            <button class="map-chip" onclick="pinpointMyLocation()">🎯 Pinpoint Me</button>
-            <button class="map-chip" onclick="stepCoimbatoreCorridor()" title="Jump to next Coimbatore stop to see live Police Station info update">⏭️ Next Stop</button>
-            <button id="layerBtn" class="map-chip" onclick="toggleMapLayer()">🗺️ Street Map</button>
-            <button id="followBtn" class="map-chip active" onclick="toggleAutoFollow()">🎯 Follow: ON</button>
-            <button id="vectorBtn" class="map-chip active" onclick="togglePoliceVector()">🚨 Police Vector</button>
-            <button id="offRouteBtn" class="map-chip" onclick="simulateOffRoute()">⚠️ Off-Route</button>
-            <button id="stopBtn" class="map-chip" onclick="simulateUnusualStop()">⏸️ Unusual Stop</button>
-            <button id="historyBtn" class="map-chip" onclick="toggleJourneyDrawer()">📜 Log</button>
-            <button class="map-chip" onclick="shareLiveLocation()">📤 Share</button>
-          </div>
-
-          <!-- Route Deviation / Unusual Stop Check-In Banner -->
-          <div id="safetyCheckBanner" class="safety-banner hidden">
-            <div style="font-size:12px; line-height:1.4;">
-              <strong id="checkBannerTitle">⚠️ ROUTE DEVIATION DETECTED!</strong><br />
-              <span id="checkBannerSub">Auto-SOS to trusted contacts in</span> <span id="checkCountdown">10</span>s. Are you safe?
-            </div>
-            <button onclick="confirmSafe()">I'm Safe</button>
-          </div>
-
-          <!-- Journey History Drawer -->
-          <div id="journeyDrawer" class="journey-drawer hidden">
-            <div class="journey-head">
-              <span>📜 JOURNEY HISTORY</span>
-              <span id="journeyCount" style="font-size:10px; color:var(--text-muted);">0 pts</span>
-            </div>
-            <div id="journeyEntries" class="journey-entries">
-              <div>Start Safe Ride or click map to log waypoints.</div>
-            </div>
-          </div>
-
-          <!-- Floating Live GPS Telemetry HUD -->
-          <div class="gps-hud">
-            <div class="hud-top">
-              <strong>🛰️ GPS TELEMETRY (COIMBATORE)</strong>
-              <div style="display:flex; align-items:center; gap:6px;">
-                <a id="hudGmapsLink" href="https://maps.google.com/?q=10.9085,76.9985" target="_blank" style="color:#38bdf8; text-decoration:none; font-size:10px; font-weight:700;">Google Maps ↗</a>
-                <span id="hudSignal" class="sig-badge">STANDBY</span>
-              </div>
-            </div>
-            <div id="hudAddress" class="hud-addr">Othakalmandapam, Coimbatore, Tamil Nadu</div>
-            <div class="hud-grid">
-              <span>Speed: <strong id="hudSpeed">0 km/h</strong></span>
-              <span>Heading: <strong id="hudHeading">N (0°)</strong></span>
-              <span>Dist: <strong id="hudDist">0.00 km</strong></span>
-              <span>Pin: <strong id="hudCoords">10.90850, 76.99850</strong></span>
-            </div>
-          </div>
-        </div>
-
-        <!-- STRICTLY DISPLAY-ONLY POLICE STATION COVERAGE PANEL -->
-        <div id="policeCoveragePanel" class="police-coverage-panel">
-          <div class="pc-header">
-            <div class="pc-title">🚓 COIMBATORE POLICE STATION COVERAGE</div>
-            <div class="pc-badges-wrap">
-              <div class="pc-radar-badge">
-                <span class="pc-radar-dot"></span>
-                <span>19 Stations Monitored</span>
-              </div>
-              <div class="pc-display-only-badge">
-                <span>👁️ Display Only • No Messages Sent to Police</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="pc-active-grid">
-            <div>
-              <div id="activePsName" class="pc-station-name">Othakalmandapam Outpost</div>
-              <div id="activePsZone" class="pc-zone">Jurisdiction: Othakalmandapam Junction &amp; Pollachi Main Rd</div>
-              <div class="pc-metrics">
-                <span class="pc-chip">📏 Distance: <strong id="activePsDist">0.00 km</strong></span>
-                <span class="pc-chip">⏱️ Patrol ETA: <strong id="activePsEta">~1 min</strong></span>
-                <span class="pc-chip">📡 Radar Radius: <strong>800m</strong></span>
-              </div>
-            </div>
-
-            <div class="pc-readonly-box">
-              <div class="pc-phone-label">Control Room Number (Reference Only)</div>
-              <div id="activePsPhone" class="pc-phone-num">0422-2655228</div>
-              <div class="pc-readonly-note">🔒 Display Only • No Messages Sent to Police</div>
-            </div>
-          </div>
-
-          <div class="pc-summary-bar">
-            <span>360° Corridor Radar: Othakalmandapam – Podanur – Ukkadam – Gandhipuram – Peelamedu – Pollachi Hwy</span>
-            <span style="color:#38bdf8;">💡 Tap anywhere on the map or click <strong>Next Stop</strong> to view live nearest station info</span>
-          </div>
-
-          <div id="nearbyStationsGrid" class="pc-nearby-grid"></div>
-        </div>
-
-        <div class="bottom-deck">
-          <div class="controls-stack">
-            <button class="btn btn-safe" onclick="startSafeRide()">🛡️ START SAFE RIDE (Coimbatore Radar / Live GPS)</button>
-            <button class="btn btn-sos" onclick="triggerManualSOS('MANUAL SOS TRIGGERED')">🚨 INSTANT SOS (Trusted Contacts Only)</button>
-            <button class="btn btn-purge" onclick="endRideSafely()">🗑️ END RIDE &amp; PURGE DATA</button>
-          </div>
-
-          <!-- MODULE 6: HEARTBEAT, CLOUD VAULT & SUDDEN PHONE SHUTDOWN DEAD-MAN'S SWITCH -->
-          <div class="heartbeat-card">
-            <div class="hb-row">
-              <div>
-                <div class="hb-title">💓 DEAD-MAN'S SWITCH</div>
-                <div id="hbStatus" class="hb-status">ONLINE • SYNCING</div>
-              </div>
-              <div style="text-align:right;">
-                <div class="hb-title">📶 NETWORK</div>
-                <div id="netStatus" class="hb-status">ONLINE</div>
-              </div>
-            </div>
-
-            <div class="pulse-wrap">
-              <div id="hbDot" class="pulse-dot"></div>
-            </div>
-
-            <div id="vaultSyncBox" class="vault-sync-box">
-              <div class="vault-sync-head">
-                <span id="vaultSyncTitle">☁️ LAST-KNOWN FINAL PIN</span>
-                <span id="vaultSyncTime">--:--:--</span>
-              </div>
-              <div id="vaultSyncCoords">10.90850, 76.99850 • Ready</div>
-            </div>
-
-            <div class="hb-meta">
-              <span id="batteryText">🔋 88%</span>
-              <span id="queueText">📦 Queue: 0</span>
-              <span id="policeText">🚓 Othakalmandapam</span>
-            </div>
-
-            <div class="hb-actions">
-              <button id="shutdownSimBtn" class="btn-test-off" onclick="testSwitchOff()">📵 Phone Shutdown (5s)</button>
-              <button id="offlineSimBtn" class="btn-test-net" onclick="toggleOfflineSimulation()">📴 Test Offline</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===================================================================== -->
-  <!-- 3. EMERGENCY SOS MODAL (TRUSTED PERSONAL CONTACTS ONLY)               -->
-  <!-- ===================================================================== -->
-  <div id="sosModal" class="modal-overlay hidden">
-    <div class="modal-card">
-      <h3 style="color:#f87171; margin-bottom:4px;">🚨 EMERGENCY ALERT — TRUSTED CONTACTS ONLY</h3>
-      <p style="font-size:12px; color:var(--text-muted);">
-        Dispatched <strong>exclusively</strong> to your personal emergency contacts. Nearest police info is included as plain reference text only—no messages or calls are sent to police.
-      </p>
-
-      <div id="deliveryTracker" class="delivery-list" style="margin-top:12px;"></div>
-
-      <div id="sosPayload" class="payload-box"></div>
-      <div id="dispatchButtons" class="dispatch-grid"></div>
-      <button class="btn btn-ghost" onclick="closeSosModal()">Dismiss Alert</button>
-    </div>
-  </div>
-
-  <!-- ===================================================================== -->
-  <!-- 4. AI RIDE SAFETY AUDIT REPORT MODAL                                  -->
-  <!-- ===================================================================== -->
-  <div id="reportModal" class="modal-overlay hidden">
-    <div class="modal-card report">
-      <h3 style="color:#38bdf8; margin-bottom:4px;">📊 AI RIDE SAFETY AUDIT REPORT</h3>
-      <p id="reportSubtitle" style="font-size:12px; color:var(--text-muted);">Real-time journey telemetry &amp; risk analysis summary</p>
-
-      <div class="report-grid">
-        <div class="stat-tile"><span>Distance Covered</span><strong id="repDist">0.00 km</strong></div>
-        <div class="stat-tile"><span>Journey Duration</span><strong id="repDur">00:00</strong></div>
-        <div class="stat-tile"><span>Avg / Max Speed</span><strong id="repSpeed">0 / 0 km/h</strong></div>
-        <div class="stat-tile"><span>AI Safety Score</span><strong id="repScore" style="color:#34d399;">95 / 100</strong></div>
-      </div>
-
-      <div id="reportTextBox" class="payload-box"></div>
-      <button class="btn btn-save-grad" style="margin-top:6px;" onclick="copySafetyReport()">📋 Copy Safety Audit Report</button>
-      <button class="btn btn-ghost" onclick="closeReportModal()">Close Report</button>
-    </div>
-  </div>
-
-  <div id="toast" class="toast hidden"></div>
-
-  <!-- External Libraries & Modular Team Scripts -->
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
-  <script src="config.js"></script>
-  <script src="ocr.js"></script>
-  <script src="map.js"></script>
-</body>
-</html>
+    .icon-btn { background: var(--bg-card); border: 1px solid var(--border); color: var(--text
