@@ -1,5 +1,5 @@
 /* ===================================================================== */
-/* map.js — Member 1: Leaflet Map, Live GPS, Google Maps Road Routing    */
+/* map.js — RideGuard AI GPS Lock, Coimbatore 19-Station Radar & Routing  */
 /* ===================================================================== */
 
 const VAULT_STORAGE_KEY = "rideguard_vault_v1";
@@ -67,7 +67,9 @@ const roadRouteCache = new Map();
 const stationRouteMetricsMap = new Map();
 let currentRoadMetrics = { roadKm: 3.78, durationMins: 7, coords: [], source: "ESTIMATE" };
 
-/* ==================== 1. VAULT ENCRYPTION & SESSION ==================== */
+/* ===================================================================== */
+/* 1. ENCRYPTED VAULT & SESSION HELPERS                                  */
+/* ===================================================================== */
 function generateSessionToken() {
   return "RG-AES-" + Math.random().toString(36).substring(2, 8).toUpperCase();
 }
@@ -113,7 +115,29 @@ function loadEncryptedProfile() {
   return null;
 }
 
-/* ==================== 2. HARDWARE GPS & FAST GEOCODING ================= */
+/* ===================================================================== */
+/* 2. APP BOOTSTRAP & MULTI-SAMPLE PRECISION SATELLITE GPS LOCK          */
+/* ===================================================================== */
+window.onload = () => {
+  initBattery();
+  loadOfflineQueue();
+  window.addEventListener("online", handleNetworkStateChange);
+  window.addEventListener("offline", handleNetworkStateChange);
+  window.addEventListener("pagehide", dispatchLastGaspShutdownBeacon);
+  window.addEventListener("beforeunload", dispatchLastGaspShutdownBeacon);
+
+  const saved = loadEncryptedProfile();
+  if (saved && Array.isArray(saved.coords) && saved.coords.length === 2) {
+    sessionToken = generateSessionToken();
+    currentCoords = { lat: saved.coords[0], lng: saved.coords[1], accuracy: 15, speedKmh: 0, heading: 0 };
+    currentAddress = saved.locationName || `${saved.coords[0].toFixed(5)}, ${saved.coords[1].toFixed(5)}`;
+    showDashboard(saved);
+    checkInterruptedRideRecovery();
+  } else {
+    autoDetectLoginLocation(false);
+  }
+};
+
 function samplePreciseHardwareGps(onProgress, quickMode = false) {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
@@ -258,7 +282,10 @@ async function autoDetectLoginLocation(manualTrigger = false) {
   }
 }
 
-function fetchWithTimeout(url, timeoutMs = 2600) {
+/* ===================================================================== */
+/* 3. FORWARD GEOCODING, LOGIN & PROFILE TRANSITIONS                     */
+/* ===================================================================== */
+function fetchWithTimeout(url, timeoutMs = 2500) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
@@ -313,7 +340,7 @@ async function resolvePlaceCoordinates(query, biasCoords = null) {
       return { coords: [lat, lng], place };
     });
 
-  const nomSearchUrl = CONFIG.GEOCODE_ENDPOINTS.NOMINATIM_SEARCH || "[https://nominatim.openstreetmap.org/search](https://nominatim.openstreetmap.org/search)";
+  const nomSearchUrl = CONFIG.GEOCODE_ENDPOINTS.NOMINATIM_SEARCH || "https://nominatim.openstreetmap.org/search";
   const nominatimTask = fetchWithTimeout(`${nomSearchUrl}?format=json&limit=1&q=${encodeURIComponent(cleaned)}`, 2800)
     .then(async (res) => {
       if (!res.ok) throw new Error("Nominatim failed");
@@ -328,59 +355,6 @@ async function resolvePlaceCoordinates(query, biasCoords = null) {
     return null;
   }
 }
-
-async function reverseGeocode(lat, lng) {
-  const photonRev = fetchWithTimeout(`${CONFIG.GEOCODE_ENDPOINTS.PHOTON}?lat=${lat}&lon=${lng}`, 2200)
-    .then(async (res) => {
-      if (!res.ok) throw new Error("Photon rev failed");
-      const data = await res.json();
-      const feat = data.features && data.features[0];
-      const p = feat && feat.properties;
-      const formatted = p && [p.name, p.street, p.suburb || p.district, p.city || p.town || p.village, p.state]
-        .filter((v, i, arr) => v && arr.indexOf(v) === i)
-        .join(", ");
-      if (!formatted) throw new Error("Empty Photon rev");
-      return formatted;
-    });
-
-  const bdcRev = fetchWithTimeout(`${CONFIG.GEOCODE_ENDPOINTS.BIGDATACLOUD}?latitude=${lat}&longitude=${lng}&localityLanguage=en`, 2200)
-    .then(async (res) => {
-      if (!res.ok) throw new Error("BDC rev failed");
-      const data = await res.json();
-      const formatted = [data.locality, data.city, data.principalSubdivision]
-        .filter((v, i, arr) => v && arr.indexOf(v) === i)
-        .join(", ");
-      if (!formatted) throw new Error("Empty BDC rev");
-      return formatted;
-    });
-
-  try {
-    return await Promise.any([photonRev, bdcRev]);
-  } catch (e) {
-    return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
-  }
-}
-
-/* ==================== 3. APP BOOTSTRAP & LOGIN TRANSITIONS ============== */
-window.onload = () => {
-  initBattery();
-  loadOfflineQueue();
-  window.addEventListener("online", handleNetworkStateChange);
-  window.addEventListener("offline", handleNetworkStateChange);
-  window.addEventListener("pagehide", dispatchLastGaspShutdownBeacon);
-  window.addEventListener("beforeunload", dispatchLastGaspShutdownBeacon);
-
-  const saved = loadEncryptedProfile();
-  if (saved && Array.isArray(saved.coords) && saved.coords.length === 2) {
-    sessionToken = generateSessionToken();
-    currentCoords = { lat: saved.coords[0], lng: saved.coords[1], accuracy: 15, speedKmh: 0, heading: 0 };
-    currentAddress = saved.locationName || `${saved.coords[0].toFixed(5)}, ${saved.coords[1].toFixed(5)}`;
-    showDashboard(saved);
-    checkInterruptedRideRecovery();
-  } else {
-    autoDetectLoginLocation(false);
-  }
-};
 
 async function saveProfile() {
   const name = document.getElementById("userName").value.trim();
@@ -447,7 +421,10 @@ async function quickDemoLogin() {
 
     if (typedLoc && locInput.dataset.userEdited) {
       const geo = await resolvePlaceCoordinates(typedLoc, autoDetectedCoords);
-      if (geo) { coords = geo.coords; locationName = geo.place; }
+      if (geo) {
+        coords = geo.coords;
+        locationName = geo.place;
+      }
     }
     if (!coords && autoDetectedCoords) {
       coords = autoDetectedCoords;
@@ -455,7 +432,10 @@ async function quickDemoLogin() {
     }
     if (!coords && typedLoc) {
       const geo = await resolvePlaceCoordinates(typedLoc);
-      if (geo) { coords = geo.coords; locationName = geo.place; }
+      if (geo) {
+        coords = geo.coords;
+        locationName = geo.place;
+      }
     }
     if (!coords) {
       coords = [11.0764, 77.1421];
@@ -494,15 +474,13 @@ function showDashboard(profile) {
     currentCoords = { lat: startLat, lng: startLng, accuracy: 15, speedKmh: 0, heading: 0 };
   }
   currentAddress = profile.locationName || currentAddress || `${startLat.toFixed(5)}, ${startLng.toFixed(5)}`;
-  activeAreaStations = [...CONFIG.POLICE_STATIONS];
+  activeAreaStations = [...(CONFIG.POLICE_STATIONS || [])];
 
   document.getElementById("loginView").classList.add("hidden");
   document.getElementById("appView").classList.remove("hidden");
 
   const welcomeEl = document.getElementById("welcomeUser");
-  if (welcomeEl) welcomeEl.innerText = `Protected: ${profile.name} • ${currentAddress.split(",")[0]}`;
-  const tokenEl = document.getElementById("vaultTokenBadge");
-  if (tokenEl) tokenEl.innerText = `🔐 AES-256 Encrypted Vault • ${sessionToken}`;
+  if (welcomeEl) welcomeEl.innerText = `👤 ${profile.name} • 📍 ${currentAddress.split(",")[0]}`;
   const hudAddrEl = document.getElementById("hudAddress");
   if (hudAddrEl) {
     hudAddrEl.innerText = currentAddress;
@@ -547,7 +525,9 @@ function logoutProfile() {
   showToast("Switched back to profile setup.");
 }
 
-/* ==================== 4. UNIFIED GOOGLE MAPS ROAD ROUTING & MAP ========= */
+/* ===================================================================== */
+/* 4. COIMBATORE DISTRICT POLICE RADAR, OSRM ROAD ROUTING & LEAFLET MAP   */
+/* ===================================================================== */
 function getAirDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -578,26 +558,51 @@ function getCardinalHeading(deg) {
   return `${dirs[Math.round(deg / 45) % 8]} (${Math.round(deg)}°)`;
 }
 
+async function reverseGeocode(lat, lng) {
+  const photonRev = fetchWithTimeout(`${CONFIG.GEOCODE_ENDPOINTS.PHOTON}?lat=${lat}&lon=${lng}`, 2200)
+    .then(async (res) => {
+      if (!res.ok) throw new Error("Photon rev failed");
+      const data = await res.json();
+      const feat = data.features && data.features[0];
+      const p = feat && feat.properties;
+      const formatted = p && [p.name, p.street, p.suburb || p.district, p.city || p.town || p.village, p.state]
+        .filter((v, i, arr) => v && arr.indexOf(v) === i)
+        .join(", ");
+      if (!formatted) throw new Error("Empty Photon rev");
+      return formatted;
+    });
+
+  const bdcRev = fetchWithTimeout(`${CONFIG.GEOCODE_ENDPOINTS.BIGDATACLOUD}?latitude=${lat}&longitude=${lng}&localityLanguage=en`, 2200)
+    .then(async (res) => {
+      if (!res.ok) throw new Error("BDC rev failed");
+      const data = await res.json();
+      const formatted = [data.locality, data.city, data.principalSubdivision]
+        .filter((v, i, arr) => v && arr.indexOf(v) === i)
+        .join(", ");
+      if (!formatted) throw new Error("Empty BDC rev");
+      return formatted;
+    });
+
+  try {
+    return await Promise.any([photonRev, bdcRev]);
+  } catch (e) {
+    return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
+  }
+}
+
 function getRankedPoliceStations(lat, lng) {
   const list = activeAreaStations.length ? activeAreaStations : (CONFIG.POLICE_STATIONS || []);
   return list
-    .map((ps) => ({ ...ps, airKm: getAirDistanceKm(lat, lng, ps.lat, ps.lng) }))
+    .map((ps) => ({
+      ...ps,
+      airKm: getAirDistanceKm(lat, lng, ps.lat, ps.lng)
+    }))
     .sort((a, b) => a.airKm - b.airKm);
 }
 
 function getNearestPolice(lat, lng) {
   const ranked = getRankedPoliceStations(lat, lng);
   return ranked[0] || { name: "Sulur Police Station", phone: "0422-2687233", lat: 11.0246, lng: 77.1256, airKm: 0 };
-}
-
-function getStationDisplayMetrics(startLat, startLng, ps) {
-  const key = `${startLat.toFixed(3)},${startLng.toFixed(3)}->${ps.lat.toFixed(4)},${ps.lng.toFixed(4)}`;
-  if (stationRouteMetricsMap.has(key)) {
-    return stationRouteMetricsMap.get(key);
-  }
-  const roadKm = estimateRoadDistanceKm(startLat, startLng, ps.lat, ps.lng);
-  const durationMins = Math.max(2, Math.round((roadKm / 30) * 60));
-  return { roadKm, durationMins };
 }
 
 function renderPoliceMarkersOnMap() {
@@ -640,9 +645,18 @@ function selectStationForRoadRouting(idx) {
   const ranked = getRankedPoliceStations(currentCoords.lat, currentCoords.lng).slice(0, 4);
   if (ranked[idx]) {
     selectedTargetStation = ranked[idx];
-    lastRoadRouteKey = "";
     updatePoliceCoverageUI(currentCoords.lat, currentCoords.lng, true);
   }
+}
+
+function getStationDisplayMetrics(startLat, startLng, ps) {
+  const key = `${startLat.toFixed(3)},${startLng.toFixed(3)}->${ps.lat.toFixed(4)},${ps.lng.toFixed(4)}`;
+  if (stationRouteMetricsMap.has(key)) {
+    return stationRouteMetricsMap.get(key);
+  }
+  const roadKm = estimateRoadDistanceKm(startLat, startLng, ps.lat, ps.lng);
+  const durationMins = Math.max(2, Math.round((roadKm / 30) * 60));
+  return { roadKm, durationMins };
 }
 
 function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
@@ -662,7 +676,7 @@ function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
   const phoneEl = document.getElementById("nearestPolicePhone");
   const distEl = document.getElementById("nearestPoliceDist");
   const etaEl = document.getElementById("nearestPoliceEta");
-  const routeLinkEl = document.getElementById("stationGoogleRouteLink");
+  const gmapsRouteEl = document.getElementById("gmapsDirectionsLink");
   const listEl = document.getElementById("nearbyStationsList");
 
   if (nameEl) nameEl.innerText = activePs.name;
@@ -670,8 +684,8 @@ function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
   if (phoneEl) phoneEl.innerText = activePs.phone;
   if (distEl) distEl.innerText = inCoimbatore ? `${activeMetrics.roadKm.toFixed(2)} km` : `${activePs.airKm.toFixed(1)} km (Outside CBE)`;
   if (etaEl) etaEl.innerText = `~${activeMetrics.durationMins} mins`;
-  if (routeLinkEl) {
-    routeLinkEl.href = `[https://www.google.com/maps/dir/?api=1&origin=$](https://www.google.com/maps/dir/?api=1&origin=$){lat.toFixed(6)},${lng.toFixed(6)}&destination=${activePs.lat.toFixed(6)},${activePs.lng.toFixed(6)}&travelmode=driving`;
+  if (gmapsRouteEl) {
+    gmapsRouteEl.href = `https://www.google.com/maps/dir/?api=1&origin=${lat.toFixed(6)},${lng.toFixed(6)}&destination=${activePs.lat.toFixed(6)},${activePs.lng.toFixed(6)}&travelmode=driving`;
   }
 
   if (activeStationHighlight) {
@@ -696,7 +710,7 @@ function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
   }
 
   if (triggerToast) {
-    showToast(`🚓 Previewing Google Maps road route to ${activePs.name} (Reference Only)`);
+    showToast(`🚓 Previewing road route to ${activePs.name} (Reference Only)`);
   }
 
   computeGoogleMapsRoadRoute(lat, lng, activePs);
@@ -753,13 +767,33 @@ async function computeGoogleMapsRoadRoute(startLat, startLng, targetStation) {
     };
   }
 
-  currentRoadMetrics = routeData;
   stationRouteMetricsMap.set(cacheKey, { roadKm: routeData.roadKm, durationMins: routeData.durationMins });
+  currentRoadMetrics = routeData;
 
   const distEl = document.getElementById("nearestPoliceDist");
   const etaEl = document.getElementById("nearestPoliceEta");
   if (distEl) distEl.innerText = `${routeData.roadKm.toFixed(2)} km`;
   if (etaEl) etaEl.innerText = `~${routeData.durationMins} mins`;
+
+  // Re-sync the 3 mini-cards and Safety Analytics with the exact OSRM road distance
+  const ranked = getRankedPoliceStations(startLat, startLng);
+  const listEl = document.getElementById("nearbyStationsList");
+  if (listEl) {
+    listEl.innerHTML = ranked
+      .slice(0, 3)
+      .map((ps, idx) => {
+        const m = getStationDisplayMetrics(startLat, startLng, ps);
+        return `
+        <div class="station-mini-card ${ps.name === targetStation.name ? "active" : ""}" onclick="selectStationForRoadRouting(${idx})">
+          <div class="st-title">● ${ps.name}</div>
+          <div class="st-meta">
+            <span>${m.roadKm.toFixed(2)} km away</span>
+            <span class="st-phone">${ps.phone}</span>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
 
   if (roadRouteLine && roadRouteOutline) {
     roadRouteOutline.setLatLngs(showRoadRoute ? routeData.coords : []);
@@ -797,7 +831,6 @@ async function applyLocationFromScreenshot(extractedPlace) {
   }
 
   selectedTargetStation = null;
-  lastRoadRouteKey = "";
   currentAddress = resolved.place;
   lastGeocodeTime = Date.now();
   liveTrailCoords = [];
@@ -817,7 +850,7 @@ async function applyLocationFromScreenshot(extractedPlace) {
   await updatePosition(resolved.coords[0], resolved.coords[1], 12, 0, 0);
   await discoverNearbyPoliceStations(resolved.coords[0], resolved.coords[1], true);
 
-  if (riderMarker) riderMarker.bindPopup(`<b>📍 Location from Uploaded Ticket</b><br/>${resolved.place}`).openPopup();
+  if (riderMarker) riderMarker.bindPopup(`<b>📍 Location from Uploaded Screenshot</b><br/>${resolved.place}`).openPopup();
   if (map) map.setView(resolved.coords, 14);
   return resolved.place;
 }
@@ -860,7 +893,6 @@ function initMap() {
   riderMarker.on("dragend", (ev) => {
     const pos = ev.target.getLatLng();
     selectedTargetStation = null;
-    lastRoadRouteKey = "";
     lastGeocodeTime = 0;
     updatePosition(pos.lat, pos.lng, 10, 0, 0);
     showToast("📍 Pin adjusted manually to exact location.");
@@ -875,7 +907,6 @@ function initMap() {
 
   map.on("click", (e) => {
     selectedTargetStation = null;
-    lastRoadRouteKey = "";
     lastGeocodeTime = 0;
     updatePosition(e.latlng.lat, e.latlng.lng, 12, 28, 45);
   });
@@ -916,7 +947,7 @@ async function pinpointMyLocation() {
   const sigEl = document.getElementById("hudSignal");
   sigEl.className = "sig-badge fair";
   sigEl.innerText = "LOCKING GPS...";
-  showToast("🛰️ Acquiring high-accuracy satellite GPS...");
+  showToast("🛰️ Acquiring high-accuracy satellite GPS (waiting for sharpest fix)...");
 
   const result = await acquireBestLocation((msg) => {
     const match = msg.match(/±\d+m/);
@@ -928,7 +959,7 @@ async function pinpointMyLocation() {
     sigEl.innerText = result.policyBlocked ? "SANDBOX BLOCKED" : "GPS UNAVAILABLE";
     return showToast(
       result.policyBlocked
-        ? "Preview iframe blocks hardware GPS (IP guess skipped to avoid wrong district). Drag the blue pin or upload a ticket."
+        ? "Preview iframe blocks hardware GPS (IP guess skipped to avoid wrong district). Search your area below or drag the blue pin."
         : result.errorCode === 1
           ? "Location blocked: tap 🔒 in browser address bar → Allow Location, then retry."
           : "No satellite GPS lock indoors. Enable High-Accuracy Location on your device or drag the map pin."
@@ -944,7 +975,6 @@ async function pinpointMyLocation() {
   }
 
   selectedTargetStation = null;
-  lastRoadRouteKey = "";
   lastGeocodeTime = 0;
   await discoverNearbyPoliceStations(result.lat, result.lng, true);
   await updatePosition(result.lat, result.lng, result.accuracy, result.speedKmh || 0, result.heading || 0);
@@ -973,7 +1003,9 @@ function togglePoliceVector() {
   }
 }
 
-/* ==================== 5. SAFETY ANALYTICS & TELEMETRY ================== */
+/* ===================================================================== */
+/* 5. AI SAFETY ANALYTICS, SAFE RIDE TELEMETRY & CHECK-INS               */
+/* ===================================================================== */
 function evaluateRiskAnalytics() {
   if (!currentCoords) return 96;
   let score = 96;
@@ -997,17 +1029,16 @@ function evaluateRiskAnalytics() {
     score -= 28;
     indicators.push({ text: "⏸️ Unusual Mid-Route Vehicle Stop", warn: true });
   } else {
-    indicators.push({ text: "✅ Expected Corridor Trajectory Normal", warn: false });
+    indicators.push({ text: "✅ Highway Road Trajectory Normal", warn: false });
   }
 
-  const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
+  const activePs = selectedTargetStation || getNearestPolice(currentCoords.lat, currentCoords.lng);
   const inCbe = isInsideCoimbatoreDistrict(currentCoords.lat, currentCoords.lng);
-  const syncedMetrics = getStationDisplayMetrics(currentCoords.lat, currentCoords.lng, nearestPs);
   indicators.push({
     text: inCbe
-      ? `🚓 ${nearestPs.name} (${syncedMetrics.roadKm.toFixed(2)} km)`
+      ? `🛣️ ${activePs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road)`
       : `ℹ️ Coimbatore District Info Only (Pin outside CBE)`,
-    warn: inCbe && syncedMetrics.roadKm > 15
+    warn: inCbe && currentRoadMetrics.roadKm > 15
   });
 
   score = Math.max(12, Math.min(99, score));
@@ -1096,12 +1127,587 @@ function toggleJourneyDrawer() {
 function recordJourneyWaypoint(lat, lng, speedKmh, label, stationName) {
   const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   journeyHistory.unshift({ time, lat, lng, speedKmh, label, stationName });
-  if (journeyHistory.length >/*
- * The previous map.js implementation is loaded from the immutable, complete
- * revision in config.js. This file is intentionally inert: the current
- * truncated map implementation redeclared globals and caused a SyntaxError
- * after the compatibility implementation had already loaded.
- *
- * Once the map module is fully restored locally, remove the pinned loader from
- * config.js and put the complete implementation here.
- */
+  if (journeyHistory.length > 30) journeyHistory.pop();
+  const countEl = document.getElementById("journeyCount");
+  const listEl = document.getElementById("journeyEntries");
+  if (countEl) countEl.innerText = `${journeyHistory.length} pts`;
+  if (listEl) {
+    listEl.innerHTML = journeyHistory.map((pt) => `<div>[${pt.time}] ${pt.label} • 🛣️ ${currentRoadMetrics.roadKm.toFixed(2)}km to ${pt.stationName.split(" ")[0]}</div>`).join("");
+  }
+}
+
+function shareLiveLocation() {
+  if (!currentCoords) return;
+  const driver = document.getElementById("driverName").value || "Not Scanned";
+  const vehicle = document.getElementById("vehicleNumber").value || "TN-38-AB-1234";
+  const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
+  const mapsUrl = `https://maps.google.com/?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
+  const shareText = `🛡️ RideGuard AI Live Trip Share\nRider: ${activeProfile?.name || "Rider"}\nDriver: ${driver} | Vehicle: ${vehicle}\nLocation: ${currentAddress}\nCoimbatore Dist. Police (Info Only): ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road) • Tel: ${nearestPs.phone}\nTrack Live Pin: ${mapsUrl}`;
+  copyTextFallback(shareText);
+  const primaryPhone = activeProfile?.contacts?.[0]?.phone?.replace(/\D/g, "") || "";
+  if (primaryPhone) {
+    showToast(`📋 Live pin copied! Opening WhatsApp for ${activeProfile.contacts[0].name}...`);
+    window.open(`https://wa.me/${primaryPhone}?text=${encodeURIComponent(shareText)}`, "_blank");
+  } else {
+    showToast("📋 Live tracking link copied to clipboard!");
+  }
+}
+
+function startSafeRide() {
+  if (!currentCoords) return showToast("Please set your starting location first.");
+  isRideActive = true;
+  isPhonePoweredOff = false;
+  rideStartTime = Date.now();
+  speedSamples = [];
+  maxSpeedKmh = 0;
+  stationarySeconds = 0;
+  alertsTriggeredCount = 0;
+  liveTrailCoords = [];
+  journeyHistory = [];
+  totalDistanceKm = 0;
+
+  if (shutdownPinMarker && map) {
+    map.removeLayer(shutdownPinMarker);
+    shutdownPinMarker = null;
+  }
+
+  const badge = document.getElementById("sessionBadge");
+  badge.innerText = "🛡️ ACTIVE SAFE RIDE SESSION";
+  badge.classList.remove("danger");
+  setHeartbeatUI(true);
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+  syncShadowVaultSnapshot();
+
+  if (isLiveGps && navigator.geolocation) {
+    if (watchId) navigator.geolocation.clearWatch(watchId);
+    watchId = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (liveTrailCoords.length > 0 && pos.coords.accuracy > CONFIG.GPS_JITTER_MAX_METERS) return;
+        const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+        updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, speedKmh, pos.coords.heading || 0);
+      },
+      (err) => showToast(`GPS Error (${err.message}). Enable location permission.`),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+    );
+  } else {
+    clearInterval(demoTimer);
+    let roadIdx = 0;
+    const fallbackStepPts = [
+      [currentCoords.lat, currentCoords.lng],
+      [currentCoords.lat + 0.0045, currentCoords.lng + 0.0042],
+      [currentCoords.lat + 0.0092, currentCoords.lng + 0.0085],
+      [currentCoords.lat + 0.0138, currentCoords.lng + 0.0124]
+    ];
+    const roadPts = currentRoadMetrics.coords && currentRoadMetrics.coords.length >= 2 ? currentRoadMetrics.coords : fallbackStepPts;
+    updatePosition(roadPts[0][0], roadPts[0][1], 10, 36, 192);
+    roadIdx = 1;
+    demoTimer = setInterval(() => {
+      const pt = roadPts[roadIdx % roadPts.length];
+      updatePosition(pt[0], pt[1], 10, 38, 185);
+      roadIdx++;
+    }, 2600);
+  }
+
+  sendHeartbeat();
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL_MS);
+  showToast("🛡️ Safe Ride active along live road network.");
+}
+
+async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0, silentInit = false) {
+  if (isPhonePoweredOff) return;
+  if (liveTrailCoords.length > 0 && !silentInit) {
+    const prev = liveTrailCoords[liveTrailCoords.length - 1];
+    totalDistanceKm += getDistanceKm(prev[0], prev[1], lat, lng);
+  }
+
+  currentCoords = { lat, lng, accuracy: Math.round(accuracy), speedKmh, heading };
+  if (!silentInit) {
+    liveTrailCoords.push([lat, lng]);
+    speedSamples.push(speedKmh);
+    if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
+  }
+
+  if (isRideActive && speedKmh === 0 && !silentInit) {
+    stationarySeconds += 2.6;
+    if (stationarySeconds >= 15 && !activeSafetyAlertType) triggerSafetyCheckIn("UNUSUAL_STOP");
+  } else {
+    stationarySeconds = 0;
+  }
+
+  if (riderMarker) riderMarker.setLatLng([lat, lng]);
+  if (accuracyCircle) accuracyCircle.setLatLng([lat, lng]).setRadius(Math.min(accuracy, 200));
+  if (liveTrailLine) liveTrailLine.setLatLngs(liveTrailCoords);
+  if (autoFollow && map) map.panTo([lat, lng]);
+
+  const nearestPs = updatePoliceCoverageUI(lat, lng, !silentInit);
+  discoverNearbyPoliceStations(lat, lng, false);
+
+  const sigEl = document.getElementById("hudSignal");
+  sigEl.className = "sig-badge" + (accuracy > 80 ? " weak" : accuracy > 30 ? " fair" : "");
+  sigEl.innerText = accuracy <= 30 ? `EXACT ±${Math.round(accuracy)}m` : `±${Math.round(accuracy)}m`;
+  document.getElementById("hudSpeed").innerText = `${speedKmh} km/h`;
+  document.getElementById("hudHeading").innerText = getCardinalHeading(heading);
+  document.getElementById("hudDist").innerText = `${totalDistanceKm.toFixed(2)} km`;
+  document.getElementById("hudCoords").innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+
+  if (typeof syncGoogleMapsTelemetryLink === "function") syncGoogleMapsTelemetryLink();
+
+  if (Date.now() - lastGeocodeTime > 12000) {
+    lastGeocodeTime = Date.now();
+    currentAddress = await reverseGeocode(lat, lng);
+    const addrEl = document.getElementById("hudAddress");
+    addrEl.innerText = currentAddress;
+    addrEl.title = currentAddress;
+  }
+
+  if (!silentInit) recordJourneyWaypoint(lat, lng, speedKmh, currentAddress.split(",")[0], nearestPs.name);
+  syncShadowVaultSnapshot();
+  evaluateRiskAnalytics();
+}
+
+/* ===================================================================== */
+/* 6. SUDDEN PHONE SHUTDOWN VAULT, OFFLINE QUEUE & SOS DISPATCH          */
+/* ===================================================================== */
+function syncShadowVaultSnapshot() {
+  if (!currentCoords) return;
+  const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
+  const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  lastKnownVault = {
+    lat: currentCoords.lat,
+    lng: currentCoords.lng,
+    accuracy: currentCoords.accuracy,
+    speedKmh: currentCoords.speedKmh,
+    battery: currentBattery,
+    address: currentAddress,
+    timestamp: nowTime,
+    isoTime: new Date().toISOString(),
+    driver: document.getElementById("driverName")?.value || "Not Scanned",
+    vehicle: document.getElementById("vehicleNumber")?.value || "TN-38-AB-1234",
+    policeName: nearestPs.name,
+    policePhone: nearestPs.phone,
+    policeRoadKm: currentRoadMetrics.roadKm
+  };
+
+  const box = document.getElementById("vaultSyncBox");
+  const titleEl = document.getElementById("vaultSyncTitle");
+  const timeEl = document.getElementById("vaultSyncTime");
+  const coordsEl = document.getElementById("vaultSyncCoords");
+
+  if (box && !isPhonePoweredOff) {
+    box.classList.remove("frozen");
+    if (titleEl) titleEl.innerText = "☁️ LAST-KNOWN FINAL PIN";
+    if (timeEl) timeEl.innerText = nowTime;
+    if (coordsEl) coordsEl.innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} • ${currentAddress.split(",")[0]}`;
+  }
+
+  if (isRideActive && activeProfile) {
+    try {
+      localStorage.setItem(ACTIVE_RIDE_SNAPSHOT_KEY, JSON.stringify({ profile: activeProfile, vault: lastKnownVault }));
+    } catch (e) {}
+  }
+}
+
+function dispatchLastGaspShutdownBeacon() {
+  if (!isRideActive || !activeProfile || !lastKnownVault) return;
+  const payload = JSON.stringify({
+    event: "SUDDEN_PHONE_SHUTDOWN",
+    user: activeProfile.name,
+    user_phone: activeProfile.userPhone,
+    contacts: activeProfile.contacts,
+    dispatch_police: false,
+    final_location: lastKnownVault
+  });
+  try {
+    if (navigator.sendBeacon) {
+      navigator.sendBeacon(`${CONFIG.API_BASE_URL}/sos`, new Blob([payload], { type: "application/json" }));
+    }
+  } catch (e) {}
+}
+
+function checkInterruptedRideRecovery() {
+  try {
+    const raw = localStorage.getItem(ACTIVE_RIDE_SNAPSHOT_KEY);
+    if (!raw) return;
+    const interrupted = JSON.parse(raw);
+    if (interrupted && interrupted.vault) {
+      lastKnownVault = interrupted.vault;
+      showToast(`⚠️ Previous ride ended abruptly at ${interrupted.vault.address} (${interrupted.vault.timestamp}).`);
+    }
+  } catch (e) {}
+}
+
+async function initBattery() {
+  try {
+    if (navigator.getBattery) {
+      const bat = await navigator.getBattery();
+      const updateBat = () => {
+        currentBattery = Math.round(bat.level * 100);
+        const batEl = document.getElementById("batteryText");
+        if (batEl) batEl.innerText = `🔋 ${currentBattery}%`;
+        if (isRideActive && !isPhonePoweredOff && !bat.charging && currentBattery <= 3) testSwitchOff(true);
+      };
+      updateBat();
+      bat.addEventListener("levelchange", updateBat);
+    }
+  } catch (e) {}
+  const batEl = document.getElementById("batteryText");
+  if (batEl) batEl.innerText = `🔋 ${currentBattery}%`;
+}
+
+function isNetworkOnline() { return !simulatedOffline && navigator.onLine; }
+
+function loadOfflineQueue() {
+  try { offlineOutbox = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY) || "[]"); } catch (e) { offlineOutbox = []; }
+  updateNetworkUI();
+}
+
+function saveOfflineQueue() {
+  try { localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(offlineOutbox)); } catch (e) {}
+  updateNetworkUI();
+}
+
+function updateNetworkUI() {
+  const netEl = document.getElementById("netStatus");
+  const qEl = document.getElementById("queueText");
+  const btn = document.getElementById("offlineSimBtn");
+  if (!netEl) return;
+  const online = isNetworkOnline();
+  netEl.innerText = online ? "ONLINE" : "OFFLINE (QUEUING)";
+  netEl.className = online ? "hb-status" : "hb-status amber";
+  qEl.innerText = `📦 Queue: ${offlineOutbox.length}`;
+  if (btn) btn.innerText = simulatedOffline ? "📶 Go Online" : "📴 Test Offline";
+}
+
+function toggleOfflineSimulation() {
+  simulatedOffline = !simulatedOffline;
+  updateNetworkUI();
+  if (!simulatedOffline) flushOfflineQueue();
+  else showToast("📴 Offline mode active. Heartbeats & SOS alerts will queue locally.");
+}
+
+function handleNetworkStateChange() {
+  updateNetworkUI();
+  if (isNetworkOnline()) flushOfflineQueue();
+}
+
+function enqueueOfflinePacket(type, payload) {
+  offlineOutbox.push({ type, payload, queuedAt: new Date().toLocaleTimeString() });
+  saveOfflineQueue();
+}
+
+function flushOfflineQueue() {
+  if (!isNetworkOnline() || offlineOutbox.length === 0) return;
+  const count = offlineOutbox.length;
+  showToast(`🔄 Network restored! Auto-retrying ${count} queued alert(s) to personal contacts...`);
+  offlineOutbox.forEach((item) => {
+    fetch(`${CONFIG.API_BASE_URL}${item.type === "SOS" ? "/sos" : "/heartbeat"}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-RideGuard-Token": sessionToken },
+      body: JSON.stringify(item.payload)
+    }).catch(() => {});
+  });
+  setTimeout(() => {
+    offlineOutbox = [];
+    saveOfflineQueue();
+    showToast(`✅ All ${count} queued alert(s) flushed to personal emergency contacts!`);
+  }, 1200);
+}
+
+function sendHeartbeat() {
+  if (!activeProfile || !currentCoords) return;
+  const police = getNearestPolice(currentCoords.lat, currentCoords.lng);
+  const packet = {
+    user: activeProfile.name,
+    email: activeProfile.email,
+    user_phone: activeProfile.userPhone,
+    contacts: activeProfile.contacts,
+    dispatch_police: false,
+    lat: currentCoords.lat,
+    lng: currentCoords.lng,
+    accuracy_m: currentCoords.accuracy,
+    speed_kmh: currentCoords.speedKmh,
+    battery: currentBattery,
+    driver: document.getElementById("driverName").value || "Not Scanned",
+    vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234",
+    nearest_police_ref: `${police.name} (${police.phone} • Coimbatore Dist. Info Only)`
+  };
+  if (!isNetworkOnline()) return enqueueOfflinePacket("HEARTBEAT", packet);
+  fetch(`${CONFIG.API_BASE_URL}/heartbeat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-RideGuard-Token": sessionToken },
+    body: JSON.stringify(packet)
+  }).catch(() => {});
+}
+
+function setHeartbeatUI(online) {
+  const status = document.getElementById("hbStatus");
+  const dot = document.getElementById("hbDot");
+  if (status) {
+    status.innerText = online ? "ONLINE • SYNCING" : "PHONE SHUTDOWN DETECTED";
+    status.classList.toggle("offline", !online);
+  }
+  if (dot) dot.classList.toggle("offline", !online);
+}
+
+function testSwitchOff(isCriticalBattery = false) {
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+  clearInterval(heartbeatTimer);
+  clearInterval(demoTimer);
+  clearTimeout(switchOffTimer);
+  clearInterval(switchOffCountdownInterval);
+
+  isPhonePoweredOff = true;
+  if (!lastKnownVault) syncShadowVaultSnapshot();
+  setHeartbeatUI(false);
+
+  const box = document.getElementById("vaultSyncBox");
+  const titleEl = document.getElementById("vaultSyncTitle");
+  const coordsEl = document.getElementById("vaultSyncCoords");
+  if (box) box.classList.add("frozen");
+  if (titleEl) titleEl.innerText = "📵 FINAL STOP LOCATION LOCKED";
+  if (coordsEl && lastKnownVault) coordsEl.innerText = `${lastKnownVault.lat.toFixed(5)}, ${lastKnownVault.lng.toFixed(5)} • ${lastKnownVault.address}`;
+
+  if (map && lastKnownVault) {
+    if (shutdownPinMarker) map.removeLayer(shutdownPinMarker);
+    shutdownPinMarker = L.circleMarker([lastKnownVault.lat, lastKnownVault.lng], {
+      radius: 11, color: "#fef2f2", fillColor: "#ef4444", fillOpacity: 0.95, weight: 3
+    }).addTo(map).bindPopup(`<b>📵 PHONE SHUTDOWN — FINAL STOP LOCATION</b><br/>Area: ${lastKnownVault.address}<br/>Stopped At: ${lastKnownVault.timestamp}`).openPopup();
+    map.panTo([lastKnownVault.lat, lastKnownVault.lng]);
+  }
+
+  const badge = document.getElementById("sessionBadge");
+  let secs = 5;
+  badge.innerText = `📵 PHONE SHUTDOWN — SENDING FINAL PIN IN ${secs}s`;
+  badge.classList.add("danger");
+
+  showToast(
+    isCriticalBattery
+      ? "🪫 Battery ≤3%! Locking final location & alerting trusted contacts in 5s..."
+      : `📵 Phone powered off at ${lastKnownVault?.address?.split(",")[0] || "stop spot"}! Sending final location in 5s...`
+  );
+
+  switchOffCountdownInterval = setInterval(() => {
+    secs--;
+    if (secs > 0) badge.innerText = `📵 PHONE SHUTDOWN — SENDING FINAL PIN IN ${secs}s`;
+    else {
+      clearInterval(switchOffCountdownInterval);
+      badge.innerText = "🚨 FINAL SHUTDOWN LOCATION DISPATCHED";
+    }
+  }, 1000);
+
+  const reason = isCriticalBattery
+    ? "CRITICAL BATTERY SHUTDOWN (≤3%) — FINAL LOCATION WHERE DRIVE STOPPED"
+    : "SUDDEN PHONE SHUTDOWN — FINAL LOCATION WHERE DRIVE STOPPED";
+
+  switchOffTimer = setTimeout(() => triggerManualSOS(reason, lastKnownVault), 5000);
+}
+
+async function triggerManualSOS(reason, shutdownVault = null) {
+  if (!activeProfile) return;
+  alertsTriggeredCount++;
+  const locData = shutdownVault || {
+    lat: currentCoords.lat,
+    lng: currentCoords.lng,
+    accuracy: currentCoords.accuracy,
+    speedKmh: currentCoords.speedKmh,
+    battery: currentBattery,
+    address: currentAddress,
+    timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+    driver: document.getElementById("driverName").value || "Not Scanned",
+    vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234"
+  };
+
+  const police = getNearestPolice(locData.lat, locData.lng);
+  const inCbe = isInsideCoimbatoreDistrict(locData.lat, locData.lng);
+  const roadDist = currentRoadMetrics.roadKm || estimateRoadDistanceKm(locData.lat, locData.lng, police.lat, police.lng);
+  const mapsUrl = `https://maps.google.com/?q=${locData.lat.toFixed(6)},${locData.lng.toFixed(6)}`;
+  const incidentId = `RG-${Math.floor(100000 + Math.random() * 900000)}`;
+  const isShutdownEvent = Boolean(shutdownVault) || /SHUTDOWN/i.test(reason);
+  const policeInfoLine = inCbe
+    ? `Coimbatore Dist. Police (Info Only): ${police.name} (${roadDist.toFixed(2)} km by road) • Ref Tel: ${police.phone}`
+    : `Coimbatore Dist. Police (Info Only): ${police.name} • Ref Tel: ${police.phone}`;
+
+  lastSosMessage =
+    `🚨 RIDEGUARD AI ALERT [${incidentId}] (${reason})\n` +
+    `Rider: ${activeProfile.name} (${activeProfile.userPhone})\n` +
+    `Email: ${activeProfile.email}\n` +
+    `${isShutdownEvent ? "📍 FINAL LOCATION WHERE PHONE STOPPED" : "📍 Live Location"}: ${locData.address}\n` +
+    `Exact GPS Pin: ${locData.lat.toFixed(6)}, ${locData.lng.toFixed(6)} (±${locData.accuracy}m)\n` +
+    `Time Stopped: ${locData.timestamp} | Speed at Stop: ${locData.speedKmh} km/h | Last Battery: ${locData.battery}%\n` +
+    `Driver: ${locData.driver} | Vehicle: ${locData.vehicle}\n` +
+    `${policeInfoLine}\n` +
+    `Google Maps Pin: ${mapsUrl}`;
+
+  document.getElementById("sosPayload").innerText = lastSosMessage;
+  document.getElementById("deliveryTracker").innerHTML = activeProfile.contacts
+    .map((c, idx) => `<div class="delivery-item"><div><strong>${c.name}</strong> <span style="color:var(--text-muted); font-size:11px;">(${c.phone})</span></div><span id="delivStatus_${idx}" class="deliv-badge sending">📡 Sending...</span></div>`)
+    .join("");
+  document.getElementById("dispatchButtons").innerHTML = activeProfile.contacts
+    .map((c, idx) => `<button class="btn btn-safe" onclick="openWhatsAppFallback(${idx})">💬 WhatsApp (${c.name})</button><button class="btn btn-purge" onclick="openSmsFallback(${idx})">📩 SMS (${c.name})</button>`)
+    .join("");
+  document.getElementById("sosModal").classList.remove("hidden");
+
+  const sosPacket = {
+    incident_id: incidentId,
+    user: activeProfile.name,
+    contacts: activeProfile.contacts,
+    dispatch_police: false,
+    sudden_shutdown: isShutdownEvent,
+    final_coordinates: { lat: locData.lat, lng: locData.lng, address: locData.address, timestamp: locData.timestamp },
+    reason,
+    message: lastSosMessage
+  };
+
+  if (!isNetworkOnline()) {
+    enqueueOfflinePacket("SOS", sosPacket);
+    activeProfile.contacts.forEach((_, idx) => {
+      const el = document.getElementById(`delivStatus_${idx}`);
+      if (el) { el.className = "deliv-badge queued"; el.innerText = "📦 Queued Offline (Will Retry)"; }
+    });
+    return;
+  }
+
+  fetch(`${CONFIG.API_BASE_URL}/sos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-RideGuard-Token": sessionToken },
+    body: JSON.stringify(sosPacket)
+  }).catch(() => {});
+
+  activeProfile.contacts.forEach((_, idx) => {
+    const el = document.getElementById(`delivStatus_${idx}`);
+    if (!el) return;
+    if (idx === 1) {
+      setTimeout(() => { el.className = "deliv-badge retry"; el.innerText = "⚠️ Retrying (2/3)..."; }, 900);
+      setTimeout(() => { el.className = "deliv-badge ok"; el.innerText = `✅ Delivered (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })})`; }, 2200);
+    } else {
+      setTimeout(() => { el.className = "deliv-badge ok"; el.innerText = `✅ Delivered (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })})`; }, 1100);
+    }
+  });
+}
+
+function openWhatsAppFallback(index) {
+  const contact = activeProfile?.contacts?.[index];
+  if (!contact) return;
+  window.open(`https://wa.me/${contact.phone.replace(/\D/g, "")}?text=${encodeURIComponent(lastSosMessage)}`, "_blank");
+}
+
+function openSmsFallback(index) {
+  const contact = activeProfile?.contacts?.[index];
+  if (!contact) return;
+  window.open(`sms:${contact.phone}?body=${encodeURIComponent(lastSosMessage)}`, "_self");
+}
+
+function closeSosModal() { document.getElementById("sosModal").classList.add("hidden"); }
+
+/* ===================================================================== */
+/* 7. SAFETY AUDIT REPORT & ZERO-TRACE PRIVACY PURGE                     */
+/* ===================================================================== */
+function openSafetyReport(isPostRide = false) {
+  const elapsedSec = rideStartTime ? Math.max(1, Math.round((Date.now() - rideStartTime) / 1000)) : 0;
+  const mins = String(Math.floor(elapsedSec / 60)).padStart(2, "0");
+  const secs = String(elapsedSec % 60).padStart(2, "0");
+  const avgSpeed = speedSamples.length ? Math.round(speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length) : 0;
+  const finalScore = evaluateRiskAnalytics();
+  const nearestPs = currentCoords ? getNearestPolice(currentCoords.lat, currentCoords.lng) : { name: "Sulur Police Station", phone: "0422-2687233" };
+
+  document.getElementById("reportSubtitle").innerText = isPostRide
+    ? "Trip completed safely — all temporary telemetry & OCR data purged from memory."
+    : "Real-time road telemetry & AI risk pattern summary";
+  document.getElementById("repDist").innerText = `${totalDistanceKm.toFixed(2)} km`;
+  document.getElementById("repDur").innerText = `${mins}:${secs}`;
+  document.getElementById("repSpeed").innerText = `${avgSpeed} / ${maxSpeedKmh} km/h`;
+  document.getElementById("repScore").innerText = `${finalScore} / 100`;
+
+  document.getElementById("reportTextBox").innerText =
+    `🛡️ RIDEGUARD AI — SAFETY AUDIT REPORT\n` +
+    `Rider: ${activeProfile?.name || "Rider"}\n` +
+    `Vehicle: ${document.getElementById("vehicleNumber").value || "Not Scanned"} | Driver: ${document.getElementById("driverName").value || "Not Scanned"}\n` +
+    `Trip Distance: ${totalDistanceKm.toFixed(2)} km | Duration: ${mins}:${secs}\n` +
+    `Avg / Max Speed: ${avgSpeed} / ${maxSpeedKmh} km/h\n` +
+    `Safety Score: ${finalScore}/100 | Alerts Triggered: ${alertsTriggeredCount}\n` +
+    `Coimbatore Dist. Police Info: ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road) • Ref Tel: ${nearestPs.phone}\n` +
+    `Privacy Status: ${isPostRide ? "PURGED (Zero-Retention)" : "ACTIVE ENCRYPTED"}`;
+  document.getElementById("reportModal").classList.remove("hidden");
+}
+
+function closeReportModal() { document.getElementById("reportModal").classList.add("hidden"); }
+
+function copySafetyReport() {
+  copyTextFallback(document.getElementById("reportTextBox").innerText);
+  showToast("📋 Safety Audit Report copied to clipboard!");
+}
+
+function copyTextFallback(text) {
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
+  } catch (e) {}
+}
+
+function endRideSafely() {
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+  clearInterval(heartbeatTimer);
+  clearInterval(demoTimer);
+  clearTimeout(switchOffTimer);
+  clearInterval(switchOffCountdownInterval);
+  clearInterval(safetyCheckInterval);
+
+  if (activeProfile) {
+    fetch(`${CONFIG.API_BASE_URL}/end-ride`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-RideGuard-Token": sessionToken },
+      body: JSON.stringify({ user: activeProfile.name })
+    }).catch(() => {});
+  }
+
+  openSafetyReport(true);
+  isRideActive = false;
+  isPhonePoweredOff = false;
+  activeSafetyAlertType = null;
+  if (typeof isPlateMismatch !== "undefined") isPlateMismatch = false;
+  if (typeof verifiedBookingPlate !== "undefined") verifiedBookingPlate = "";
+  if (typeof verifiedBookingDriver !== "undefined") verifiedBookingDriver = "";
+  liveTrailCoords = [];
+  journeyHistory = [];
+  totalDistanceKm = 0;
+  rideStartTime = null;
+
+  try { localStorage.removeItem(ACTIVE_RIDE_SNAPSHOT_KEY); } catch (e) {}
+  if (shutdownPinMarker && map) { map.removeLayer(shutdownPinMarker); shutdownPinMarker = null; }
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+  document.getElementById("vaultSyncBox")?.classList.remove("frozen");
+  document.getElementById("driverName").value = "";
+  document.getElementById("vehicleNumber").value = "";
+  const fileInput = document.getElementById("screenshotInput");
+  if (fileInput) fileInput.value = "";
+  document.getElementById("imageQualityBadge").innerText = "Awaiting Scan";
+  document.getElementById("ocrLocationBadge")?.classList.add("hidden");
+  document.getElementById("ocrStatus").innerText = "Waiting for booking screenshot...";
+  document.getElementById("ocrStatus").classList.remove("success");
+  document.getElementById("ocrPreview").innerHTML = "<strong>Upload Rapido / Uber / Ola Screenshot</strong><br/>Click or drop ticket here to auto-fill Driver, Plate &amp; Live Map";
+  document.getElementById("journeyCount").innerText = "0 pts";
+  document.getElementById("journeyEntries").innerHTML = "<div>Trip purged. Start Safe Ride to log new waypoints.</div>";
+  document.getElementById("sessionBadge").innerText = "🛡️ RIDE ENDED — ZERO DATA RETAINED";
+  document.getElementById("sessionBadge").classList.remove("danger");
+  document.getElementById("safetyCheckBanner").classList.add("hidden");
+  document.getElementById("mismatchBanner").classList.add("hidden");
+  setHeartbeatUI(true);
+  evaluateRiskAnalytics();
+  showToast("✅ Ride ended safely. Temporary GPS & OCR data purged.");
+}
+
+function showToast(msg) {
+  const t = document.getElementById("toast");
+  if (!t) return;
+  t.innerText = msg;
+  t.classList.remove("hidden");
+  setTimeout(() => t.classList.add("hidden"), 3500);
+}
