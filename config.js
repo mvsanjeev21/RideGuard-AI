@@ -1,16 +1,20 @@
 /**
- * config.js — Member 4: Dynamic Settings, Precision GPS Thresholds,
- * Global Road/Police Endpoints & Coimbatore 19-Station Reference DB.
- *
- * Dispatch Policy: Police station phone numbers are STRICTLY DISPLAY-ONLY
- * reference details. No automated calls or messages are ever sent to police.
+ * config.js — RideGuard AI runtime configuration.
+ * Police station phone numbers are display-only; alerts are not sent to police.
  */
 
-const CONFIG = {
-  // Backend Flask Dead-Man's Switch API URL (replace with HTTPS URL when hosted)
-  API_BASE_URL: "http://127.0.0.1:5000",
+let configuredApiBaseUrl = "";
+try {
+  configuredApiBaseUrl = (localStorage.getItem("rideguard_api_base_url") || "").trim();
+} catch (e) {
+  // Storage may be disabled; the frontend can still run without a backend.
+}
 
-  // Keyless High-DPI Esri Map Tile Layers (Zero API keys or watermarks)
+const CONFIG = {
+  // Configure the hosted API with localStorage.setItem("rideguard_api_base_url", "https://your-api.example")
+  // Empty by default so GitHub Pages never mistakenly calls a visitor's localhost.
+  API_BASE_URL: (configuredApiBaseUrl || window.RIDEGUARD_API_BASE_URL || "").replace(/\/+$/, ""),
+
   MAP_TILES: {
     STREET: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
     DARK_BASE: "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
@@ -18,8 +22,6 @@ const CONFIG = {
     SATELLITE: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
     SATELLITE_LABELS: "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}"
   },
-
-  // 3-Tier Keyless Forward & Reverse Geocoding Endpoints
   GEOCODE_ENDPOINTS: {
     PHOTON_SEARCH: "https://photon.komoot.io/api/",
     PHOTON: "https://photon.komoot.io/reverse",
@@ -27,17 +29,11 @@ const CONFIG = {
     NOMINATIM: "https://nominatim.openstreetmap.org/reverse",
     BIGDATACLOUD: "https://api.bigdatacloud.net/data/reverse-geocode-client"
   },
-
-  // Keyless OpenStreetMap OSRM Road Router (Google Maps-style driving distance)
   OSRM_ROUTE_URL: "https://router.project-osrm.org/route/v1/driving",
-
-  // Keyless Overpass API Endpoints for Worldwide Police Station Discovery
   OVERPASS_ENDPOINTS: [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter"
   ],
-
-  // Telemetry, Dead-Man's Switch & Multi-Sample Precision GPS Guardrails
   HEARTBEAT_INTERVAL_MS: 10000,
   GPS_LOCK_TARGET_METERS: 25,
   GPS_LOCK_MAX_WAIT_MS: 12000,
@@ -45,9 +41,6 @@ const CONFIG = {
   GPS_COARSE_REJECT_METERS: 1200,
   GPS_JITTER_MAX_METERS: 120,
   LOCAL_POLICE_MAX_RADIUS_KM: 60,
-
-  // Curated 19 Coimbatore & Surrounding Police Stations (Used ONLY when within 60 km of Coimbatore)
-  // All phone numbers are strictly read-only reference text.
   POLICE_STATIONS: [
     { name: "Sulur Police Station", zone: "Sulur, Arasur, KPRIET Corridor & Trichy Rd", lat: 11.0246, lng: 77.1256, phone: "0422-2687233" },
     { name: "Peelamedu Police Station", zone: "Peelamedu, Avinashi Rd, PSG Tech & Airport", lat: 11.0283, lng: 77.0028, phone: "0422-2572344" },
@@ -69,10 +62,62 @@ const CONFIG = {
     { name: "Kinathukadavu Police Station", zone: "Kinathukadavu & Southern Pollachi Hwy", lat: 10.8214, lng: 77.0181, phone: "04259-242220" },
     { name: "Pollachi Police Station", zone: "Pollachi Town & Valparai Junction", lat: 10.6609, lng: 77.0048, phone: "04259-224433" }
   ],
-
-  // OCR Regex Reference Patterns
   OCR_PATTERNS: {
     vehicleNumber: /\b[A-Z]{2}[\s-]?\d{1,2}[\s-]?[A-Z]{1,3}[\s-]?\d{3,4}\b/i,
     driverKeywords: /(?:driver|captain|partner|pilot|rider)[:\s]+([A-Za-z.\s]{3,26})/i
   }
 };
+
+/*
+ * The latest map.js commit accidentally removed the app's shared state and most
+ * top-level functions. Load the last complete version first to restore those
+ * globals. The current map.js then overrides its GPS/geocoding improvements.
+ * This is pinned to an immutable commit so it cannot change unexpectedly.
+ */
+document.write('<script src="https://raw.githubusercontent.com/mvsanjeev21/RideGuard-AI/2f6ba60916d0bcda0ccaf799909e3a3f4f279889/map.js"><\/script>');
+
+// Repair the accidentally truncated/nested coverage UI after all scripts load.
+window.addEventListener("load", function restorePoliceCoverageUI() {
+  window.updatePoliceCoverageUI = function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
+    const ranked = getRankedPoliceStations(lat, lng);
+    const activePs = selectedTargetStation
+      ? { ...selectedTargetStation, airKm: getAirDistanceKm(lat, lng, selectedTargetStation.lat, selectedTargetStation.lng) }
+      : ranked[0];
+    if (!activePs) return { name: "Sulur Police Station", phone: "0422-2687233", airKm: 0 };
+
+    const inCoimbatore = isInsideCoimbatoreDistrict(lat, lng);
+    const setTxt = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) element.innerText = value;
+    };
+    setTxt("activePsName", inCoimbatore ? activePs.name : `${activePs.name} (Coimbatore Dist. Ref)`);
+    setTxt("activePsZone", `Jurisdiction: ${activePs.zone}`);
+    setTxt("activePsAirDist", inCoimbatore ? `${activePs.airKm.toFixed(1)} km` : "Outside CBE");
+    setTxt("activePsPhone", activePs.phone);
+
+    const mapsLink = document.getElementById("hudGmapsLink");
+    if (mapsLink) {
+      mapsLink.href = `https://www.google.com/maps/dir/?api=1&origin=${lat.toFixed(5)},${lng.toFixed(5)}&destination=${activePs.lat.toFixed(5)},${activePs.lng.toFixed(5)}&travelmode=driving`;
+    }
+    if (activeStationHighlight) activeStationHighlight.setLatLng([activePs.lat, activePs.lng]);
+
+    const panel = document.getElementById("policeCoveragePanel");
+    if (lastActivePoliceName && lastActivePoliceName !== activePs.name && panel) {
+      panel.classList.add("station-switched");
+      setTimeout(() => panel.classList.remove("station-switched"), 1400);
+      if (triggerToast) showToast(`🚓 Coimbatore Police Info switched to ${activePs.name}`);
+    }
+    lastActivePoliceName = activePs.name;
+
+    const grid = document.getElementById("nearbyStationsGrid");
+    if (grid) {
+      grid.innerHTML = ranked.slice(0, 4).map((station, index) => {
+        const selected = station.name === activePs.name;
+        const distance = inCoimbatore ? `~${station.estRoadKm.toFixed(1)} km road` : "Coimbatore Dist.";
+        return `<div class="pc-mini-card ${selected ? "nearest" : ""}" onclick="selectStationForRoadRouting(${index})"><div class="pc-mini-name">${selected ? "🟢 " : "🚓 "}${station.name}</div><div class="pc-mini-meta"><span>${distance}</span><span class="pc-mini-tel">${station.phone}</span></div></div>`;
+      }).join("");
+    }
+    computeGoogleMapsRoadRoute(lat, lng, activePs);
+    return activePs;
+  };
+});
