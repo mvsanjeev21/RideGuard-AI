@@ -275,7 +275,6 @@ function extractIndianVehiclePlate(text) {
     }
   }
 
-  // Fallback for explicitly labeled mock/test tickets (e.g., "Vehicle Number: TEST VEHICLE")
   const labeledVehicle = text.match(/(?:vehicle\s*(?:no|number|plate)|reg(?:istration)?\s*no)\s*[:\-]\s*([A-Z0-9\s-]{4,22})/i);
   if (labeledVehicle) {
     const val = labeledVehicle[1].trim().toUpperCase();
@@ -287,13 +286,12 @@ function extractIndianVehiclePlate(text) {
   return "";
 }
 
-/* 5. Strict Driver / Captain Extractor (Handles Live Cards, 2-Column Invoices & Test Mocks) */
+/* 5. Strict Driver / Captain Extractor */
 function isBlockedNonDriverText(line) {
   const s = line.trim();
   if (s.length < 3 || s.length > 36) return true;
   if (/\d|₹|\$|@|:|\/|\\|\+|#/.test(s)) return true;
 
-  // Explicitly allow mock test values like "TEST DRIVER"
   if (/^test\s+(driver|captain|user|name)$/i.test(s)) return false;
 
   const stopRegex = /\b(booking|history|hist0ry|b00king|ride|trip|details|summary|receipt|invoice|tax|fare|total|paid|cash|upi|wallet|completed|cancelled|upcoming|scheduled|rapido|uber|ola|redbus|auto|bike|cab|mini|sedan|prime|suv|xl|go|premier|moto|scooty|activa|jupiter|splendor|pulsar|apache|shine|access|dzire|swift|wagonr|wagon|etios|indica|xcent|aura|ertiga|innova|captain|driver|partner|pilot|vehicle|model|number|plate|pickup|pick|drop|location|station|railway|bus|stand|road|street|nagar|colony|puram|layout|cross|main|sector|phase|ward|kanheri|caves|krishnagiri|india|tamil|nadu|maharashtra|coimbatore|sulur|gandhipuram|peelamedu|ukkadam|saravanampatti|mumbai|chennai|bengaluru|help|support|rate|safety|share|track|live|otp|pin|verify|verified|you|rated|thanks|thank|customer|passenger|distance|duration|date|time|sample|real|view)\b/i;
@@ -329,7 +327,6 @@ function extractDriverName(text) {
   const vehicleHintRegex = /\b(swift|dzire|wagonr|etios|xcent|aura|ertiga|innova|indica|activa|jupiter|splendor|pulsar|apache|shine|access|auto|bike|cab|mini|sedan|prime|suv)\b/i;
   const plateLineRegex = /\b[A-Z]{2}[\s-]?\d{2}[\s-]?[A-Z]{1,3}[\s-]?\d{3,4}\b/i;
 
-  // Pass A: Explicit labels with OR without colon/hyphen (e.g., "Driver Name: TEST DRIVER")
   for (let i = 0; i < cells.length; i++) {
     const labelMatch = cells[i].match(
       /(?:driver|captain|partner|pilot|rider\s*captain)\s*(?:name)?\s*(?:[:\-]|\s+)\s*([A-Za-z.\s]{3,32}?)(?=\s+(?:vehicle|plate|number|date|time|fare|paid|total|trip|ride|otp|id)\b|$)/i
@@ -343,7 +340,6 @@ function extractDriverName(text) {
     }
   }
 
-  // Pass B: Name inline with or adjacent to a star rating
   for (let i = 0; i < cells.length; i++) {
     const inlineRating = cells[i].match(/^([A-Za-z.\s]{3,30}?)\s*(?:★|☆|\*|[345][.,]\d)\b/);
     if (inlineRating && !isBlockedNonDriverText(inlineRating[1])) {
@@ -355,7 +351,6 @@ function extractDriverName(text) {
     }
   }
 
-  // Pass C: Name on the same line or adjacent lines to a vehicle model or plate number
   for (let i = 0; i < cells.length; i++) {
     if (vehicleHintRegex.test(cells[i]) || plateLineRegex.test(cells[i])) {
       const sameLineStripped = cells[i]
@@ -377,29 +372,67 @@ function extractDriverName(text) {
   return "";
 }
 
-/* 6. Pickup / Drop Location Extractor for Live Map Pinning */
-function extractTicketLocation(text) {
+/* 6. Extract BOTH Starting (Pickup) and Ending (Drop) Locations */
+function extractTicketRouteEndpoints(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  let pickup = "";
+  let drop = "";
+
+  const pickupHeaderRegex = /^(?:pickup|pick[\s-]?up|from|boarding|start)(?:\s*(?:location|point|address))?\s*[:\-]?\s*(.*)$/i;
+  const dropHeaderRegex = /^(?:drop|drop[\s-]?off|destination|to|end)(?:\s*(?:location|point|address))?\s*[:\-]?\s*(.*)$/i;
 
   for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/(?:pickup|pick[\s-]?up|from|boarding|drop|destination|to)\s*[:\-]\s*(.{5,85})/i);
-    if (m && m[1].trim().length >= 5) return m[1].trim();
-  }
+    const pMatch = lines[i].match(pickupHeaderRegex);
+    if (pMatch && !pickup) {
+      if (pMatch[1] && pMatch[1].trim().length >= 5) {
+        pickup = pMatch[1].trim();
+      } else if (lines[i + 1] && !dropHeaderRegex.test(lines[i + 1])) {
+        pickup = lines[i + 1].trim();
+        if (lines[i + 2] && !dropHeaderRegex.test(lines[i + 2]) && lines[i + 2].length < 45 && !/view details/i.test(lines[i + 2])) {
+          pickup += ", " + lines[i + 2].trim();
+        }
+      }
+    }
 
-  const addrKeyword = /\b(coimbatore|sulur|gandhipuram|peelamedu|ukkadam|saravanampatti|singanallur|podanur|rspuram|r\.s\.?\s*puram|pollachi|arasur|kpriet|thudiyalur|othakalmandapam|railway\s*station|airport|bus\s*stand|road|nagar|colony|puram|street|junction|bypass)\b/i;
-  for (const line of lines) {
-    if (line.length >= 6 && line.length <= 95 && addrKeyword.test(line) && !/₹|\bfare\b|\bpaid\b/i.test(line)) {
-      return line.replace(/^[^A-Za-z0-9]+/, "").trim();
+    const dMatch = lines[i].match(dropHeaderRegex);
+    if (dMatch && !drop) {
+      if (dMatch[1] && dMatch[1].trim().length >= 5) {
+        drop = dMatch[1].trim();
+      } else if (lines[i + 1] && !/view details|fare|total|help/i.test(lines[i + 1])) {
+        drop = lines[i + 1].trim();
+        if (lines[i + 2] && !/view details|fare|total|help/i.test(lines[i + 2]) && lines[i + 2].length < 45) {
+          drop += ", " + lines[i + 2].trim();
+        }
+      }
     }
   }
 
-  return "";
+  // Fallback: collect distinct address lines if explicit headers were missing
+  if (!pickup || !drop) {
+    const addrKeyword = /\b(coimbatore|sulur|gandhipuram|peelamedu|ukkadam|saravanampatti|singanallur|podanur|rspuram|r\.s\.?\s*puram|pollachi|arasur|kpriet|thudiyalur|othakalmandapam|psg|college|technology|railway\s*station|airport|bus\s*stand|road|nagar|colony|puram|street|junction|bypass)\b/i;
+    const foundAddrs = [];
+    for (const line of lines) {
+      if (line.length >= 6 && line.length <= 95 && addrKeyword.test(line) && !/₹|\bfare\b|\bpaid\b/i.test(line)) {
+        const cleanAddr = line.replace(/^[^A-Za-z0-9]+/, "").trim();
+        if (!foundAddrs.includes(cleanAddr)) foundAddrs.push(cleanAddr);
+      }
+    }
+    if (!pickup && foundAddrs[0]) pickup = foundAddrs[0];
+    if (!drop && foundAddrs[1]) drop = foundAddrs[1];
+  }
+
+  // Clean common OCR typos (e.g., "Coilege" -> "College")
+  const cleanTypos = (s) => s.replace(/\bCoilege\b/gi, "College").replace(/\.+$/, "").trim();
+  return {
+    pickup: pickup ? cleanTypos(pickup) : "",
+    drop: drop ? cleanTypos(drop) : ""
+  };
 }
 
 /* 7. Multi-Photo & Single-Photo Ticket Upload Pipeline */
 async function processMultipleTicketFiles(files) {
   const statusEl = document.getElementById("ocrStatus");
-  let bestResult = { plate: "", driver: "", locationText: "", clarityPct: 0 };
+  let bestResult = { plate: "", driver: "", pickup: "", drop: "", clarityPct: 0 };
 
   for (let idx = 0; idx < files.length; idx++) {
     const file = files[idx];
@@ -409,7 +442,8 @@ async function processMultipleTicketFiles(files) {
     const res = await scanSingleTicketImage(file, idx === files.length - 1);
     if (res.plate && !bestResult.plate) bestResult.plate = res.plate;
     if (res.driver && !bestResult.driver) bestResult.driver = res.driver;
-    if (res.locationText && !bestResult.locationText) bestResult.locationText = res.locationText;
+    if (res.pickup && !bestResult.pickup) bestResult.pickup = res.pickup;
+    if (res.drop && !bestResult.drop) bestResult.drop = res.drop;
     if (res.clarityPct > bestResult.clarityPct) bestResult.clarityPct = res.clarityPct;
   }
 
@@ -430,16 +464,19 @@ async function processMultipleTicketFiles(files) {
     verifiedBookingPlate = bestResult.plate;
   }
 
-  let mappedPlace = "";
-  if (bestResult.locationText && typeof applyLocationFromScreenshot === "function") {
-    mappedPlace = await applyLocationFromScreenshot(bestResult.locationText);
+  let routeMapped = false;
+  if ((bestResult.pickup || bestResult.drop) && typeof applyTripEndpointsFromScreenshot === "function") {
+    routeMapped = await applyTripEndpointsFromScreenshot(bestResult.pickup, bestResult.drop);
+  } else if (bestResult.pickup && typeof applyLocationFromScreenshot === "function") {
+    const mapped = await applyLocationFromScreenshot(bestResult.pickup);
+    routeMapped = Boolean(mapped);
   }
   syncGoogleMapsTelemetryLink();
 
   if (statusEl) {
     if (bestResult.plate && bestResult.driver) {
       statusEl.classList.add("success");
-      statusEl.innerText = `✅ Auto-Filled (${files.length} photo${files.length > 1 ? "s" : ""}): ${bestResult.driver} • ${bestResult.plate}${mappedPlace ? " • Map Pinned" : ""}`;
+      statusEl.innerText = `✅ Auto-Filled: ${bestResult.driver} • ${bestResult.plate}${routeMapped ? " • Start-to-End Route Mapped" : ""}`;
     } else if (bestResult.plate || bestResult.driver) {
       statusEl.classList.add("success");
       statusEl.innerText = `✅ Partial Auto-Fill (${bestResult.plate || bestResult.driver}) — verify remaining field`;
@@ -453,8 +490,8 @@ async function processMultipleTicketFiles(files) {
   if (typeof syncShadowVaultSnapshot === "function") syncShadowVaultSnapshot();
   if (typeof showToast === "function") {
     showToast(
-      bestResult.plate || bestResult.driver
-        ? `🎫 Scanned ${files.length} photo(s) at ${bestResult.clarityPct}% clarity!`
+      routeMapped
+        ? "🗺️ Start-to-End route outline & directional arrow plotted on map!"
         : "🎫 Photo enhanced — verify driver & vehicle fields."
     );
   }
@@ -470,7 +507,6 @@ async function scanSingleTicketImage(file, showEnhancedPreview = true) {
 
     const worker = await getOcrWorker();
 
-    // Pass 1: Auto-inverted/sharpened ride-card scan
     const cardPass = buildProcessedCanvas(loaded.img, { cropCard: true, useOtsu: false });
     if (showEnhancedPreview && previewEl) {
       const enhancedDataUrl = cardPass.canvas.toDataURL("image/jpeg", 0.9);
@@ -481,19 +517,19 @@ async function scanSingleTicketImage(file, showEnhancedPreview = true) {
     let combinedText = res.data.text || "";
     let plate = extractIndianVehiclePlate(combinedText);
     let driver = extractDriverName(combinedText);
-    let locationText = extractTicketLocation(combinedText);
+    let endpoints = extractTicketRouteEndpoints(combinedText);
 
-    // Pass 2: Full-screen sharpened scan if any field is still missing
-    if (!plate || !driver || !locationText) {
+    if (!plate || !driver || !endpoints.pickup || !endpoints.drop) {
       const fullPass = buildProcessedCanvas(loaded.img, { cropCard: false, useOtsu: false });
       const resFull = await worker.recognize(fullPass.canvas);
       combinedText += "\n" + (resFull.data.text || "");
       if (!plate) plate = extractIndianVehiclePlate(combinedText);
       if (!driver) driver = extractDriverName(combinedText);
-      if (!locationText) locationText = extractTicketLocation(combinedText);
+      const fullEp = extractTicketRouteEndpoints(combinedText);
+      if (!endpoints.pickup) endpoints.pickup = fullEp.pickup;
+      if (!endpoints.drop) endpoints.drop = fullEp.drop;
     }
 
-    // Pass 3: Otsu binarized high-contrast pass if plate or driver is still missing
     if (!plate || !driver) {
       const otsuPass = buildProcessedCanvas(loaded.img, { cropCard: false, useOtsu: true });
       const resOtsu = await worker.recognize(otsuPass.canvas);
@@ -502,9 +538,15 @@ async function scanSingleTicketImage(file, showEnhancedPreview = true) {
       if (!driver) driver = extractDriverName(combinedText);
     }
 
-    return { plate, driver, locationText, clarityPct: cardPass.clarityPct };
+    return {
+      plate,
+      driver,
+      pickup: endpoints.pickup,
+      drop: endpoints.drop,
+      clarityPct: cardPass.clarityPct
+    };
   } catch (err) {
-    return { plate: "", driver: "", locationText: "", clarityPct: 0 };
+    return { plate: "", driver: "", pickup: "", drop: "", clarityPct: 0 };
   } finally {
     if (objectUrl) setTimeout(() => URL.revokeObjectURL(objectUrl), 1500);
   }
@@ -518,7 +560,11 @@ async function processRideTicketFile(file) {
 function syncGoogleMapsTelemetryLink() {
   const gmapsLink = document.getElementById("hudGoogleMapsLink");
   if (!gmapsLink || typeof currentCoords === "undefined" || !currentCoords) return;
-  gmapsLink.href = `https://www.google.com/maps?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
+  if (typeof tripEndCoords !== "undefined" && tripEndCoords && typeof tripStartCoords !== "undefined" && tripStartCoords) {
+    gmapsLink.href = `https://www.google.com/maps/dir/?api=1&origin=${tripStartCoords[0].toFixed(6)},${tripStartCoords[1].toFixed(6)}&destination=${tripEndCoords[0].toFixed(6)},${tripEndCoords[1].toFixed(6)}&travelmode=driving`;
+  } else {
+    gmapsLink.href = `https://www.google.com/maps?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
+  }
   gmapsLink.target = "_blank";
   gmapsLink.rel = "noopener noreferrer";
 }
@@ -563,20 +609,20 @@ function loadSampleTicket() {
       <div style="color:#38bdf8; font-weight:700;">RAPIDO CAPTAIN VOUCHER • VERIFIED</div>
       <div>Captain: <strong>Karthik Subramanian</strong> (★ 4.9)</div>
       <div>Vehicle: <strong>TN-38-CQ-4821</strong></div>
-      <div>Pickup: <strong>Gandhipuram, Coimbatore</strong></div>
+      <div>Start: <strong>Sulur, Coimbatore</strong> → End: <strong>PSG College, Peelamedu</strong></div>
     </div>`;
   }
   if (statusEl) {
     statusEl.classList.add("success");
-    statusEl.innerText = "✅ Auto-Filled: Karthik Subramanian • TN-38-CQ-4821 • Map Pinned";
+    statusEl.innerText = "✅ Auto-Filled: Karthik Subramanian • TN-38-CQ-4821 • Route Mapped";
   }
 
   document.getElementById("mismatchBanner")?.classList.add("hidden");
-  if (typeof applyLocationFromScreenshot === "function") {
-    applyLocationFromScreenshot("Gandhipuram, Coimbatore, Tamil Nadu").then(syncGoogleMapsTelemetryLink);
+  if (typeof applyTripEndpointsFromScreenshot === "function") {
+    applyTripEndpointsFromScreenshot("Sulur, Coimbatore, Tamil Nadu", "PSG College of Technology, Peelamedu, Coimbatore").then(syncGoogleMapsTelemetryLink);
   }
   if (typeof evaluateRiskAnalytics === "function") evaluateRiskAnalytics();
-  if (typeof showToast === "function") showToast("⚡ Sample ticket loaded — Driver, Plate & Live Map updated!");
+  if (typeof showToast === "function") showToast("⚡ Sample route loaded: Start → End outline & live moving arrow ready!");
 }
 
 function simulatePlateMismatch() {
