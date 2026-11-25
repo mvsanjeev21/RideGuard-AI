@@ -1,38 +1,56 @@
- // map.js — Member 1: Auto-GPS Login, Encrypted Vault, Coimbatore 19-Station Radar,
-// Sudden Phone Shutdown Final-Location Watchdog & Trusted-Contacts-Only SOS Dispatch
+/**
+ * map.js — Member 1: Leaflet Multi-Layer Map, Multi-Sample Precision GPS,
+ * Coimbatore District 19-Station Radar (v1.0), Google Maps-Style OSRM Road Routing,
+ * AI Safety Analytics, Offline Alert Queue & Sudden Phone Shutdown Watchdog.
+ */
 
-const VAULT_STORAGE_KEY = "rideguard_vault_v22";
+const VAULT_STORAGE_KEY = "rideguard_vault_v25";
 const LEGACY_PROFILE_KEY = "rideguard_profile_v4";
-const QUEUE_STORAGE_KEY = "rideguard_offline_queue_v22";
-const ACTIVE_RIDE_SNAPSHOT_KEY = "rideguard_active_ride_snapshot_v22";
+const QUEUE_STORAGE_KEY = "rideguard_offline_queue_v25";
+const ACTIVE_RIDE_SNAPSHOT_KEY = "rideguard_active_ride_snapshot_v25";
 
 let activeProfile = null;
 let sessionToken = "";
 let autoDetectedCoords = null;
 let autoDetectedPlaceName = "";
 
-let map, streetGroup, darkGroup, satelliteGroup, riderMarker, accuracyCircle, liveTrailLine, routeLine, policeVectorLine, activeStationHighlight, shutdownPinMarker;
+let map, streetGroup, darkGroup, satelliteGroup, riderMarker, accuracyCircle, liveTrailLine, roadRouteOutline, roadRouteLine, activeStationHighlight, shutdownPinMarker;
+let policeLayersGroup = null;
 let watchId, heartbeatTimer, demoTimer, switchOffTimer, switchOffCountdownInterval, safetyCheckInterval;
-let isLiveGps = false, autoFollow = true, showPoliceVec = true, isRideActive = false, isPhonePoweredOff = false;
+let isLiveGps = false, autoFollow = true, showRoadRoute = true, isRideActive = false, isPhonePoweredOff = false;
 let currentLayerMode = "street";
-let demoStep = 0, totalDistanceKm = 0, lastGeocodeTime = 0, rideStartTime = null;
+let totalDistanceKm = 0, lastGeocodeTime = 0, rideStartTime = null;
 let speedSamples = [], maxSpeedKmh = 0, stationarySeconds = 0, alertsTriggeredCount = 0;
 let liveTrailCoords = [], journeyHistory = [];
-let currentCoords = { lat: CONFIG.DEFAULT_CENTER[0], lng: CONFIG.DEFAULT_CENTER[1], accuracy: 15, speedKmh: 0, heading: 0 };
-let currentAddress = "Othakalmandapam, Coimbatore, Tamil Nadu";
+let currentCoords = null;
+let currentAddress = "";
 let currentBattery = 88;
 let lastSosMessage = "";
 let lastActivePoliceName = "";
+let selectedTargetStation = null;
 let lastKnownVault = null;
 let activeSafetyAlertType = null;
 
-// Offline & Network Reliability State
+// Present Version (v1.0): Coimbatore District Police Stations Only (19 Stations)
+let activeAreaStations = [...CONFIG.POLICE_STATIONS];
+
+// Google Maps-Style OSRM Road Routing Cache
+const roadRouteCache = new Map();
+let currentRoadMetrics = {
+  roadKm: 0,
+  airKm: 0,
+  durationMins: 0,
+  summary: "Awaiting user starting location",
+  source: "LIVE ROAD",
+  coords: []
+};
+
 let simulatedOffline = false;
 let offlineOutbox = [];
 
-/* ======================================================================= */
-/* 1. AUTOMATIC LOCATION ACCESS ON LOGIN PAGE & SAFE LOCALSTORAGE WRAPPER  */
-/* ======================================================================= */
+/* ===================================================================== */
+/* 1. ENCRYPTED LOCAL VAULT & SESSION HELPERS                            */
+/* ===================================================================== */
 function generateSessionToken() {
   const rand = Math.random().toString(36).substring(2, 8).toUpperCase();
   return `RG-AES-${Date.now().toString(36).toUpperCase()}-${rand}`;
@@ -83,6 +101,9 @@ function loadEncryptedProfile() {
   return null;
 }
 
+/* ===================================================================== */
+/* 2. APP BOOTSTRAP & MULTI-SAMPLE PRECISION SATELLITE GPS LOCK          */
+/* ===================================================================== */
 window.onload = () => {
   initBattery();
   loadOfflineQueue();
@@ -92,284 +113,430 @@ window.onload = () => {
   window.addEventListener("beforeunload", dispatchLastGaspShutdownBeacon);
 
   const saved = loadEncryptedProfile();
-  if (saved) {
+  if (saved && Array.isArray(saved.coords) && saved.coords.length === 2) {
     sessionToken = generateSessionToken();
-    if (Array.isArray(saved.coords) && saved.coords.length === 2) {
-      currentCoords.lat = saved.coords[0];
-      currentCoords.lng = saved.coords[1];
-    }
-    if (saved.locationName) currentAddress = saved.locationName;
+    currentCoords = { lat: saved.coords[0], lng: saved.coords[1], accuracy: 15, speedKmh: 0, heading: 0 };
+    currentAddress = saved.locationName || `${saved.coords[0].toFixed(5)}, ${saved.coords[1].toFixed(5)}`;
     showDashboard(saved);
     checkInterruptedRideRecovery();
   } else {
-    autoDetectLoginLocation();
+    autoDetectLoginLocation(false);
   }
 };
 
-/**
- * Automatically accesses GPS on the login screen, reverse-geocodes via Photon/Nominatim,
- * and falls back non-blockingly to 'Gandhipuram, Coimbatore, Tamil Nadu'.
- */
-function autoDetectLoginLocation() {
+function samplePreciseHardwareGps(onProgress) {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      return reject({ code: 0, message: "Geolocation API unsupported" });
+    }
+
+    const maxWaitMs = CONFIG.GPS_LOCK_MAX_WAIT_MS || 12000;
+    const targetMeters = CONFIG.GPS_LOCK_TARGET_METERS || 25;
+    let bestPos = null;
+    let lastError = null;
+    let settled = false;
+    const startedAt = Date.now();
+    let watcher = null;
+
+    const finish = (err = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (watcher !== null) navigator.geolocation.clearWatch(watcher);
+      if (bestPos) return resolve(bestPos);
+      reject(err || lastError || { code: 3, message: "GPS satellite lock timed out" });
+    };
+
+    const timer = setTimeout(() => finish(), maxWaitMs);
+
+    watcher = navigator.geolocation.watchPosition(
+      (pos) => {
+        const acc = Math.round(pos.coords.accuracy || 9999);
+        if (!bestPos || acc < bestPos.coords.accuracy) {
+          bestPos = pos;
+          if (onProgress) onProgress(`🛰️ Refining satellite lock... best accuracy ±${acc}m`, acc);
+        }
+        const elapsed = Date.now() - startedAt;
+        if (bestPos.coords.accuracy <= targetMeters && (elapsed >= 1200 || bestPos.coords.accuracy <= 15)) {
+          finish();
+        }
+      },
+      (err) => {
+        lastError = err;
+        const policyBlocked = /permissions policy|disabled in this document/i.test(err?.message || "");
+        if (policyBlocked || err?.code === 1) finish(err);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs }
+    );
+  });
+}
+
+async function acquireBestLocation(onStatus) {
+  let permissionState = "unknown";
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      const perm = await navigator.permissions.query({ name: "geolocation" });
+      permissionState = perm.state;
+    }
+  } catch (e) {}
+
+  if (!navigator.geolocation || window.isSecureContext === false) {
+    return { source: "failed", policyBlocked: false, errorCode: 0, errorMessage: "HTTPS required for device GPS" };
+  }
+
+  if (onStatus) {
+    onStatus(
+      permissionState === "prompt"
+        ? "🛰️ Please tap 'Allow' on the browser location popup for exact GPS..."
+        : "🛰️ Acquiring high-accuracy satellite GPS fix (up to 12s)..."
+    );
+  }
+
+  try {
+    const pos = await samplePreciseHardwareGps((msg) => {
+      if (onStatus) onStatus(msg);
+    });
+    const accuracy = Math.round(pos.coords.accuracy || 9999);
+    const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
+    const heading = pos.coords.heading || 0;
+    const rejectLimit = CONFIG.GPS_COARSE_REJECT_METERS || 1200;
+    const trustedLimit = CONFIG.GPS_MAX_TRUSTED_ACCURACY_METERS || 300;
+
+    let source = "gps";
+    if (accuracy > rejectLimit) source = "coarse_rejected";
+    else if (accuracy > trustedLimit) source = "coarse_gps";
+
+    return { source, lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy, speedKmh, heading };
+  } catch (err) {
+    const policyBlocked = /permissions policy|disabled in this document/i.test(err?.message || "");
+    return {
+      source: "failed",
+      policyBlocked,
+      errorCode: err?.code || 0,
+      errorMessage: err?.message || "GPS satellite signal unavailable"
+    };
+  }
+}
+
+async function autoDetectLoginLocation(manualTrigger = false) {
   const inputEl = document.getElementById("userLocation");
   const statusEl = document.getElementById("locationAutoStatus");
   if (!statusEl) return;
 
-  if (!navigator.geolocation) {
-    if (inputEl && !inputEl.value.trim()) inputEl.value = "Gandhipuram, Coimbatore, Tamil Nadu";
+  if (manualTrigger && inputEl) delete inputEl.dataset.userEdited;
+
+  statusEl.className = "loc-auto-status";
+  const result = await acquireBestLocation((msg) => {
+    statusEl.innerText = msg;
+  });
+
+  if (result.source === "failed") {
     statusEl.className = "loc-auto-status warn";
-    statusEl.innerText = "⚠️ GPS unavailable — defaulted to Gandhipuram, Coimbatore, Tamil Nadu";
+    if (result.policyBlocked) {
+      statusEl.innerText = "⚠️ Preview sandbox blocks hardware GPS (IP fallback disabled to avoid wrong district). Type your exact location above.";
+    } else if (result.errorCode === 1) {
+      statusEl.innerText = "⚠️ GPS permission denied — tap 🔒 Site Settings → Allow Location, or type your exact place above.";
+    } else {
+      statusEl.innerText = "⚠️ Could not lock GPS satellites indoors. Enable High-Accuracy GPS, move near a window, or type your exact place above.";
+    }
     return;
   }
 
-  statusEl.className = "loc-auto-status";
-  statusEl.innerText = "🛰️ Automatically accessing your GPS location...";
+  const lat = result.lat;
+  const lng = result.lng;
+  const acc = result.accuracy;
+  const place = await reverseGeocode(lat, lng);
 
-  navigator.geolocation.getCurrentPosition(
-    async (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      autoDetectedCoords = [lat, lng];
+  if (result.source === "coarse_rejected") {
+    statusEl.className = "loc-auto-status warn";
+    statusEl.innerText = `⚠️ Device returned low-accuracy network estimate (±${acc}m near ${place.split(",")[0]} — may be wrong district). Skipped auto-fill: enable High-Accuracy GPS or type your exact place above.`;
+    return;
+  }
 
-      const place = await reverseGeocode(lat, lng);
-      autoDetectedPlaceName = place;
-      if (inputEl && !inputEl.dataset.userEdited) {
-        inputEl.value = place;
-      }
-      statusEl.className = "loc-auto-status ok";
-      statusEl.innerText = `✅ Auto-detected: ${place} (±${Math.round(pos.coords.accuracy)}m)`;
-    },
-    () => {
-      if (inputEl && !inputEl.value.trim()) {
-        inputEl.value = "Gandhipuram, Coimbatore, Tamil Nadu";
-      }
-      statusEl.className = "loc-auto-status warn";
-      statusEl.innerText = "⚠️ GPS blocked/unavailable — defaulted to Gandhipuram, Coimbatore, Tamil Nadu";
-    },
-    { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
-  );
+  autoDetectedCoords = [lat, lng];
+  autoDetectedPlaceName = place;
+  if (inputEl && !inputEl.dataset.userEdited) inputEl.value = place;
+
+  if (result.source === "gps") {
+    statusEl.className = "loc-auto-status ok";
+    statusEl.innerText = `✅ Exact Satellite GPS Locked: ${place} (±${acc}m)`;
+  } else {
+    statusEl.className = "loc-auto-status warn";
+    statusEl.innerText = `⚠️ Moderate GPS accuracy (±${acc}m): ${place}. Tap 'Allow & Detect GPS' outdoors or edit if needed.`;
+  }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  const locInput = document.getElementById("userLocation");
-  if (locInput) {
-    locInput.addEventListener("input", () => {
-      locInput.dataset.userEdited = "1";
-      autoDetectedCoords = null;
-    });
-  }
-});
+/* ===================================================================== */
+/* 3. FORWARD GEOCODING, LOGIN & PROFILE TRANSITIONS                     */
+/* ===================================================================== */
+async function resolvePlaceCoordinates(query, biasCoords = null) {
+  const cleaned = String(query || "").trim();
+  if (!cleaned) return null;
 
-async function resolveLoginCoordinates(typedPlace) {
-  if (autoDetectedCoords && typedPlace === autoDetectedPlaceName) {
-    return { coords: autoDetectedCoords, place: typedPlace };
+  const coordMatch = cleaned.match(/^\s*(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)\s*$/);
+  if (coordMatch) {
+    const lat = parseFloat(coordMatch[1]);
+    const lng = parseFloat(coordMatch[2]);
+    if (lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180) {
+      const place = await reverseGeocode(lat, lng);
+      return { coords: [lat, lng], place };
+    }
   }
-  const fallbackPlace = "Gandhipuram, Coimbatore, Tamil Nadu";
-  const fallbackCoords = [11.0176, 76.9674];
-  if (!typedPlace) {
-    return { coords: fallbackCoords, place: fallbackPlace };
+
+  const key = cleaned.toLowerCase();
+  const knownLandmarks = [
+    { match: /\bkpriet\b|kpr\s*institute/i, coords: [11.0764, 77.1421], place: "KPRIET, Arasur, Coimbatore, Tamil Nadu" },
+    { match: /othakalmandapam|otthakkal\s*mandapam/i, coords: [10.9085, 76.9985], place: "Othakalmandapam, Coimbatore, Tamil Nadu" },
+    { match: /\bsulur\b/i, coords: [11.0246, 77.1256], place: "Sulur, Coimbatore, Tamil Nadu" },
+    { match: /\bgandhipuram\b/i, coords: [11.0168, 76.9674], place: "Gandhipuram, Coimbatore, Tamil Nadu" },
+    { match: /\bpeelamedu\b/i, coords: [11.0283, 77.0028], place: "Peelamedu, Coimbatore, Tamil Nadu" },
+    { match: /\bukkadam\b/i, coords: [10.9904, 76.9614], place: "Ukkadam, Coimbatore, Tamil Nadu" },
+    { match: /\bsaravanampatti\b/i, coords: [11.0764, 77.0042], place: "Saravanampatti, Coimbatore, Tamil Nadu" },
+    { match: /\bsinganallur\b/i, coords: [11.0012, 77.0285], place: "Singanallur, Coimbatore, Tamil Nadu" },
+    { match: /\bpodanur\b/i, coords: [10.9632, 76.9885], place: "Podanur, Coimbatore, Tamil Nadu" },
+    { match: /\br\.?s\.?\s*puram\b/i, coords: [11.0086, 76.9498], place: "R.S. Puram, Coimbatore, Tamil Nadu" },
+    { match: /\bpollachi\b/i, coords: [10.6609, 77.0048], place: "Pollachi, Coimbatore District, Tamil Nadu" },
+    { match: /\bkinathukadavu\b/i, coords: [10.8214, 77.0181], place: "Kinathukadavu, Coimbatore District, Tamil Nadu" },
+    { match: /\bthudiyalur\b/i, coords: [11.0805, 76.9412], place: "Thudiyalur, Coimbatore, Tamil Nadu" }
+  ];
+  for (const lm of knownLandmarks) {
+    if (lm.match.test(key) && key.length < 48) return { coords: lm.coords, place: lm.place };
   }
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3000);
-    const query = /coimbatore|tamil/i.test(typedPlace) ? typedPlace : `${typedPlace}, Coimbatore, Tamil Nadu`;
-    const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.PHOTON_SEARCH}?q=${encodeURIComponent(query)}&limit=1`, {
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const biasParam = Array.isArray(biasCoords) ? `&lat=${biasCoords[0]}&lon=${biasCoords[1]}` : "";
+    const res = await fetch(
+      `${CONFIG.GEOCODE_ENDPOINTS.PHOTON_SEARCH}?q=${encodeURIComponent(cleaned)}&limit=1${biasParam}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timer);
     if (res.ok) {
       const data = await res.json();
       const feat = data.features && data.features[0];
-      if (feat && Array.isArray(feat.geometry?.coordinates)) {
+      if (feat && feat.geometry && Array.isArray(feat.geometry.coordinates)) {
         const [lng, lat] = feat.geometry.coordinates;
-        return { coords: [lat, lng], place: typedPlace };
+        const p = feat.properties || {};
+        const place =
+          [p.name, p.street, p.city || p.town || p.village || p.district, p.state, p.country]
+            .filter((v, i, arr) => v && arr.indexOf(v) === i)
+            .join(", ") || cleaned;
+        return { coords: [lat, lng], place };
       }
     }
   } catch (e) {}
 
-  return { coords: fallbackCoords, place: typedPlace };
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4000);
+    const nomSearchUrl = CONFIG.GEOCODE_ENDPOINTS.NOMINATIM_SEARCH || "https://nominatim.openstreetmap.org/search";
+    const res = await fetch(`${nomSearchUrl}?format=json&limit=1&q=${encodeURIComponent(cleaned)}`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const arr = await res.json();
+      if (Array.isArray(arr) && arr[0]) {
+        return { coords: [parseFloat(arr[0].lat), parseFloat(arr[0].lon)], place: arr[0].display_name || cleaned };
+      }
+    }
+  } catch (e) {}
+
+  return null;
 }
 
 async function saveProfile() {
-  const name = (document.getElementById("userName")?.value || "").trim();
-  const email = (document.getElementById("userEmail")?.value || "").trim();
-  const userPhone = (document.getElementById("userPhone")?.value || "").trim();
-  const typedLoc = (document.getElementById("userLocation")?.value || "").trim();
-  const emName1 = (document.getElementById("emName1")?.value || "").trim();
-  const emPhone1 = (document.getElementById("emPhone1")?.value || "").trim();
-  const emName2 = (document.getElementById("emName2")?.value || "").trim();
-  const emPhone2 = (document.getElementById("emPhone2")?.value || "").trim();
+  const name = document.getElementById("userName").value.trim();
+  const email = document.getElementById("userEmail").value.trim();
+  const userPhone = document.getElementById("userPhone").value.trim();
+  const locInput = document.getElementById("userLocation");
+  const locationText = locInput.value.trim();
+  const emName1 = document.getElementById("emName1").value.trim();
+  const emPhone1 = document.getElementById("emPhone1").value.trim();
+  const emName2 = document.getElementById("emName2").value.trim();
+  const emPhone2 = document.getElementById("emPhone2").value.trim();
 
   if (!name || !email || !userPhone || !emName1 || !emPhone1) {
-    return showToast("Please fill in all required (*) fields.");
+    return showToast("Please fill in your identity and at least one trusted emergency contact.");
+  }
+  if (!locationText && !autoDetectedCoords) {
+    return showToast("Please enter your starting location or click 'Allow & Detect GPS'.");
   }
 
-  const resolved = await resolveLoginCoordinates(typedLoc);
+  let resolvedCoords = null;
+  let resolvedName = locationText;
+
+  if (autoDetectedCoords && (!locInput.dataset.userEdited || locationText === autoDetectedPlaceName || !locationText)) {
+    resolvedCoords = autoDetectedCoords;
+    resolvedName = locationText || autoDetectedPlaceName || `${autoDetectedCoords[0].toFixed(5)}, ${autoDetectedCoords[1].toFixed(5)}`;
+  } else {
+    showToast(`🔍 Locating "${locationText}"...`);
+    const geo = await resolvePlaceCoordinates(locationText, autoDetectedCoords);
+    if (!geo) {
+      return showToast("❌ Location not found. Try adding your area or city, or tap Allow & Detect GPS.");
+    }
+    resolvedCoords = geo.coords;
+    resolvedName = geo.place;
+  }
+
   const contacts = [{ name: emName1, phone: emPhone1 }];
-  if (emPhone2) contacts.push({ name: emName2 || "Secondary Contact", phone: emPhone2 });
+  if (emName2 && emPhone2) contacts.push({ name: emName2, phone: emPhone2 });
 
-  const profile = {
-    name,
-    email,
-    userPhone,
-    locationName: resolved.place,
-    coords: resolved.coords,
-    contacts
-  };
-
-  currentCoords.lat = resolved.coords[0];
-  currentCoords.lng = resolved.coords[1];
-  currentAddress = resolved.place;
-
+  const profile = { name, email, userPhone, locationName: resolvedName, coords: resolvedCoords, contacts };
+  currentCoords = { lat: resolvedCoords[0], lng: resolvedCoords[1], accuracy: 15, speedKmh: 0, heading: 0 };
+  currentAddress = resolvedName;
   persistEncryptedProfile(profile);
   showDashboard(profile);
 }
 
-function quickDemoLogin() {
-  const coords = autoDetectedCoords ? [...autoDetectedCoords] : [10.9085, 76.9985];
-  const place = autoDetectedPlaceName || (document.getElementById("userLocation")?.value || "").trim() || "Gandhipuram, Coimbatore, Tamil Nadu";
+async function quickDemoLogin() {
+  const btn = document.getElementById("quickDemoBtn");
+  if (btn) btn.disabled = true;
 
-  const demo = {
-    name: "Ananya Sharma",
-    email: "ananya@example.com",
-    userPhone: "+91 98765 43210",
-    locationName: place,
-    coords,
-    contacts: [
-      { name: "Parent", phone: "+919876500001" },
-      { name: "Friend", phone: "+919876500002" }
-    ]
-  };
-
-  currentCoords.lat = coords[0];
-  currentCoords.lng = coords[1];
-  currentAddress = place;
-
-  persistEncryptedProfile(demo);
-  showDashboard(demo);
-}
-
-function logoutProfile() {
   try {
-    localStorage.removeItem(VAULT_STORAGE_KEY);
-    localStorage.removeItem(LEGACY_PROFILE_KEY);
-  } catch (e) {}
-  activeProfile = null;
-  document.getElementById("appView").classList.add("hidden");
-  document.getElementById("loginView").classList.remove("hidden");
-  autoDetectLoginLocation();
-  showToast("🔐 Encrypted profile wiped. Switched to setup screen.");
+    document.getElementById("userName").value = "Ananya Sharma";
+    document.getElementById("userEmail").value = "ananya.sharma@rideguard.demo";
+    document.getElementById("userPhone").value = "+91 98765 43210";
+    document.getElementById("emName1").value = "Priya Sharma (Mom)";
+    document.getElementById("emPhone1").value = "+91 98765 00001";
+    document.getElementById("emName2").value = "Karthik R.";
+    document.getElementById("emPhone2").value = "+91 98765 00002";
+
+    const locInput = document.getElementById("userLocation");
+    const typedLoc = locInput.value.trim();
+
+    let coords = null;
+    let locationName = "";
+
+    if (typedLoc && locInput.dataset.userEdited) {
+      const geo = await resolvePlaceCoordinates(typedLoc, autoDetectedCoords);
+      if (geo) {
+        coords = geo.coords;
+        locationName = geo.place;
+      }
+    }
+    if (!coords && autoDetectedCoords) {
+      coords = autoDetectedCoords;
+      locationName = typedLoc || autoDetectedPlaceName || `${coords[0].toFixed(5)}, ${coords[1].toFixed(5)}`;
+    }
+    if (!coords && typedLoc) {
+      const geo = await resolvePlaceCoordinates(typedLoc);
+      if (geo) {
+        coords = geo.coords;
+        locationName = geo.place;
+      }
+    }
+    if (!coords) {
+      coords = [11.0764, 77.1421];
+      locationName = "KPRIET, Arasur, Coimbatore, Tamil Nadu";
+      locInput.value = locationName;
+    }
+
+    const profile = {
+      name: "Ananya Sharma",
+      email: "ananya.sharma@rideguard.demo",
+      userPhone: "+91 98765 43210",
+      locationName,
+      coords,
+      contacts: [
+        { name: "Priya Sharma (Mom)", phone: "+91 98765 00001" },
+        { name: "Karthik R.", phone: "+91 98765 00002" }
+      ]
+    };
+
+    currentCoords = { lat: coords[0], lng: coords[1], accuracy: 15, speedKmh: 0, heading: 0 };
+    currentAddress = locationName;
+    persistEncryptedProfile(profile);
+    showDashboard(profile);
+    showToast(`⚡ Demo profile loaded at ${locationName.split(",")[0]}!`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function showDashboard(profile) {
   activeProfile = profile;
+  const startLat = Array.isArray(profile.coords) ? profile.coords[0] : (currentCoords?.lat || 11.0168);
+  const startLng = Array.isArray(profile.coords) ? profile.coords[1] : (currentCoords?.lng || 76.9674);
+
+  if (!currentCoords) {
+    currentCoords = { lat: startLat, lng: startLng, accuracy: 15, speedKmh: 0, heading: 0 };
+  }
+  currentAddress = profile.locationName || currentAddress || `${startLat.toFixed(5)}, ${startLng.toFixed(5)}`;
+  activeAreaStations = [...CONFIG.POLICE_STATIONS];
+
   document.getElementById("loginView").classList.add("hidden");
   document.getElementById("appView").classList.remove("hidden");
-  document.getElementById("welcomeUser").innerText = `Protected: ${profile.name} • ${profile.locationName || "Coimbatore"}`;
-  document.getElementById("vaultBadge").innerText = `🔐 AES-256 Encrypted Vault • ${sessionToken.slice(0, 12)}`;
-  document.getElementById("hudAddress").innerText = currentAddress;
-  document.getElementById("hudCoords").innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)}`;
 
-  updatePoliceCoverageUI(currentCoords.lat, currentCoords.lng, false);
-  evaluateRiskAnalytics();
+  const welcomeEl = document.getElementById("welcomeUser");
+  if (welcomeEl) welcomeEl.innerText = `👤 ${profile.name} • 📍 ${currentAddress.split(",")[0]}`;
+  const hudAddrEl = document.getElementById("hudAddress");
+  if (hudAddrEl) {
+    hudAddrEl.innerText = currentAddress;
+    hudAddrEl.title = currentAddress;
+  }
+
+  initMap();
   setTimeout(() => {
-    initMap();
     if (map) {
-      map.setView([currentCoords.lat, currentCoords.lng], 13);
-      updatePosition(currentCoords.lat, currentCoords.lng, currentCoords.accuracy, 0, 0, true);
+      map.invalidateSize();
+      map.setView([startLat, startLng], 13);
     }
-  }, 60);
+  }, 80);
+
+  updatePosition(startLat, startLng, 15, 0, 0, true);
+  discoverNearbyPoliceStations(startLat, startLng, true);
+  updateNetworkUI();
+  evaluateRiskAnalytics();
 }
 
-/* ======================================================================= */
-/* 2. STRICTLY DISPLAY-ONLY POLICE STATION COVERAGE & LIVE RADAR TRACKER   */
-/* ======================================================================= */
-function getRankedPoliceStations(lat, lng) {
-  return CONFIG.POLICE_STATIONS
-    .map((ps) => ({
-      ...ps,
-      distKm: getDistanceKm(lat, lng, ps.lat, ps.lng)
-    }))
-    .sort((a, b) => a.distKm - b.distKm);
+function logoutProfile() {
+  if (watchId) navigator.geolocation.clearWatch(watchId);
+  clearInterval(heartbeatTimer);
+  clearInterval(demoTimer);
+  clearTimeout(switchOffTimer);
+  clearInterval(switchOffCountdownInterval);
+  clearInterval(safetyCheckInterval);
+
+  isRideActive = false;
+  isPhonePoweredOff = false;
+  activeSafetyAlertType = null;
+  selectedTargetStation = null;
+
+  try {
+    localStorage.removeItem(VAULT_STORAGE_KEY);
+    localStorage.removeItem(LEGACY_PROFILE_KEY);
+  } catch (e) {}
+
+  document.getElementById("appView").classList.add("hidden");
+  document.getElementById("loginView").classList.remove("hidden");
+  showToast("Switched back to profile setup.");
 }
 
-function getNearestPolice(lat, lng) {
-  const ranked = getRankedPoliceStations(lat, lng);
-  return ranked[0];
-}
-
-function updatePoliceCoverageUI(lat, lng, notifyChange = true) {
-  const ranked = getRankedPoliceStations(lat, lng);
-  const nearest = ranked[0];
-  const distLabel = nearest.distKm < 1
-    ? `${Math.round(nearest.distKm * 1000)} m`
-    : `${nearest.distKm.toFixed(2)} km`;
-  const etaMins = Math.max(1, Math.round((nearest.distKm / 32) * 60));
-
-  const nameEl = document.getElementById("activePsName");
-  const zoneEl = document.getElementById("activePsZone");
-  const distEl = document.getElementById("activePsDist");
-  const etaEl = document.getElementById("activePsEta");
-  const phoneEl = document.getElementById("activePsPhone");
-  const hbPoliceEl = document.getElementById("policeText");
-  const panelEl = document.getElementById("policeCoveragePanel");
-
-  if (nameEl) nameEl.innerText = nearest.name;
-  if (zoneEl) zoneEl.innerText = `Jurisdiction: ${nearest.zone}`;
-  if (distEl) distEl.innerText = distLabel;
-  if (etaEl) etaEl.innerText = `~${etaMins} min${etaMins > 1 ? "s" : ""}`;
-  // Strictly plain read-only text (no tel:, sms:, or wa.me triggers)
-  if (phoneEl) phoneEl.textContent = nearest.phone;
-  if (hbPoliceEl) hbPoliceEl.innerText = `🚓 ${nearest.name.split(" ")[0]} (${distLabel})`;
-
-  if (activeStationHighlight && map) {
-    activeStationHighlight.setLatLng([nearest.lat, nearest.lng]);
-  }
-
-  const nearbyGrid = document.getElementById("nearbyStationsGrid");
-  if (nearbyGrid) {
-    nearbyGrid.innerHTML = ranked.slice(0, 4).map((st, idx) => {
-      const dStr = st.distKm < 1 ? `${Math.round(st.distKm * 1000)}m` : `${st.distKm.toFixed(1)}km`;
-      return `
-        <div class="pc-mini-card ${idx === 0 ? "nearest" : ""}">
-          <div class="pc-mini-name" title="${st.name}">${idx === 0 ? "🟢 " : "🚓 "}${st.name}</div>
-          <div class="pc-mini-meta">
-            <span>${dStr} away</span>
-            <span class="pc-mini-tel">${st.phone}</span>
-          </div>
-        </div>
-      `;
-    }).join("");
-  }
-
-  if (lastActivePoliceName && lastActivePoliceName !== nearest.name) {
-    if (panelEl) {
-      panelEl.classList.add("station-switched");
-      setTimeout(() => panelEl.classList.remove("station-switched"), 1400);
-    }
-    if (notifyChange) {
-      showToast(`🚓 Nearest Station Updated (Display Only): ${nearest.name} • ${nearest.phone}`);
-    }
-  }
-  lastActivePoliceName = nearest.name;
-  return nearest;
-}
-
-/* ======================================================================= */
-/* 3. COIMBATORE MAP ENGINE (3 KEYLESS LAYERS + INTERACTIVE PIN CLICK)     */
-/* ======================================================================= */
-function getDistanceKm(lat1, lon1, lat2, lon2) {
+/* ===================================================================== */
+/* 4. COIMBATORE DISTRICT POLICE RADAR, OSRM ROAD ROUTING & LEAFLET MAP   */
+/* ===================================================================== */
+function getAirDistanceKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) ** 2;
+    Math.cos((lat1 * Math.PI) / 180) * Math.cos((lat2 * Math.PI) / 180) * Math.sin(dLon / 2) ** 2;
   return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+}
+
+function getDistanceKm(lat1, lon1, lat2, lon2) {
+  return getAirDistanceKm(lat1, lon1, lat2, lon2);
+}
+
+function estimateRoadDistanceKm(lat1, lon1, lat2, lon2) {
+  return Number((getAirDistanceKm(lat1, lon1, lat2, lon2) * 1.38).toFixed(2));
+}
+
+function isInsideCoimbatoreDistrict(lat, lng) {
+  const center = CONFIG.COIMBATORE_CENTER || [11.0168, 76.9674];
+  const radiusKm = CONFIG.COIMBATORE_DISTRICT_RADIUS_KM || 75;
+  return getAirDistanceKm(lat, lng, center[0], center[1]) <= radiusKm;
 }
 
 function getCardinalHeading(deg) {
@@ -380,29 +547,16 @@ function getCardinalHeading(deg) {
 
 async function reverseGeocode(lat, lng) {
   try {
-    const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.PHOTON}?lat=${lat}&lon=${lng}&lang=en`);
+    const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.PHOTON}?lat=${lat}&lon=${lng}`);
     if (res.ok) {
       const data = await res.json();
-      if (data.features && data.features.length > 0) {
-        const p = data.features[0].properties;
-        const streetLine = [p.housenumber, p.street].filter(Boolean).join(" ");
-        const parts = [p.name, streetLine, p.district || p.suburb, p.city || p.town || p.village]
-          .filter((v, i, arr) => v && arr.indexOf(v) === i);
-        if (parts.length >= 2) return parts.join(", ");
-      }
-    }
-  } catch (e) {}
-
-  try {
-    const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.NOMINATIM}?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.address) {
-        const a = data.address;
-        const landmark = a.amenity || a.building || a.college || a.hospital || a.shop;
-        const parts = [landmark, a.road, a.neighbourhood || a.suburb, a.city || a.town]
-          .filter((v, i, arr) => v && arr.indexOf(v) === i);
-        if (parts.length > 0) return parts.join(", ");
+      const feat = data.features && data.features[0];
+      if (feat && feat.properties) {
+        const p = feat.properties;
+        const formatted = [p.name, p.street, p.suburb || p.district, p.city || p.town || p.village, p.state]
+          .filter((v, i, arr) => v && arr.indexOf(v) === i)
+          .join(", ");
+        if (formatted) return formatted;
       }
     }
   } catch (e) {}
@@ -410,31 +564,292 @@ async function reverseGeocode(lat, lng) {
   try {
     const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.BIGDATACLOUD}?latitude=${lat}&longitude=${lng}&localityLanguage=en`);
     if (res.ok) {
-      const d = await res.json();
-      const plus = d.plusCode ? ` (${d.plusCode})` : "";
-      const area = [d.locality, d.city, d.principalSubdivision].filter(Boolean).join(", ");
-      if (area) return `${area}${plus}`;
+      const data = await res.json();
+      const formatted = [data.locality, data.city, data.principalSubdivision]
+        .filter((v, i, arr) => v && arr.indexOf(v) === i)
+        .join(", ");
+      if (formatted) return formatted;
     }
   } catch (e) {}
 
-  return `Coimbatore GPS: ${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
+  try {
+    const res = await fetch(`${CONFIG.GEOCODE_ENDPOINTS.NOMINATIM}?format=json&lat=${lat}&lon=${lng}&zoom=16`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.address) {
+        const a = data.address;
+        const formatted = [a.road || a.neighbourhood || a.suburb, a.city || a.town || a.village, a.state]
+          .filter((v, i, arr) => v && arr.indexOf(v) === i)
+          .join(", ");
+        if (formatted) return formatted;
+      }
+    }
+  } catch (e) {}
+
+  return `${Number(lat).toFixed(5)}, ${Number(lng).toFixed(5)}`;
+}
+
+async function discoverNearbyPoliceStations(lat, lng, force = false) {
+  // Present Version (v1.0): Exclusively Coimbatore District Police Stations (19 Stations)
+  activeAreaStations = [...CONFIG.POLICE_STATIONS];
+  const inCbe = isInsideCoimbatoreDistrict(lat, lng);
+  const statusBadge = document.getElementById("pcRadarStatusText");
+  if (statusBadge) {
+    statusBadge.innerText = inCbe
+      ? "Coimbatore District Only (19 Stations)"
+      : "v1.0: Coimbatore District Info Only (Pin Outside CBE)";
+  }
+  if (force) renderPoliceMarkersOnMap();
+  updatePoliceCoverageUI(lat, lng, false);
+}
+
+async function searchAndJumpLocation() {
+  const input = document.getElementById("jumpLocationInput");
+  const query = (input?.value || "").trim();
+  if (!query) return showToast("Enter a Coimbatore District area, campus, or landmark.");
+
+  showToast(`🔍 Searching "${query}" & updating Coimbatore District police info...`);
+  const resolved = await resolvePlaceCoordinates(query, CONFIG.COIMBATORE_CENTER);
+  if (!resolved) return showToast("❌ Location not found. Try adding Coimbatore or Tamil Nadu.");
+
+  selectedTargetStation = null;
+  lastGeocodeTime = Date.now();
+  currentAddress = resolved.place;
+  liveTrailCoords = [];
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+
+  await updatePosition(resolved.coords[0], resolved.coords[1], 12, 0, 0);
+  await discoverNearbyPoliceStations(resolved.coords[0], resolved.coords[1], true);
+  if (map) map.setView(resolved.coords, 14);
+  showToast(`📍 Moved to ${resolved.place}`);
+}
+
+function renderPoliceMarkersOnMap() {
+  if (!map || !policeLayersGroup) return;
+  policeLayersGroup.clearLayers();
+  activeAreaStations.forEach((ps) => {
+    L.circle([ps.lat, ps.lng], { radius: 800, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.11, weight: 1.2 }).addTo(policeLayersGroup);
+    L.circleMarker([ps.lat, ps.lng], { radius: 7, color: "#fff", fillColor: "#ef4444", fillOpacity: 1, weight: 2 })
+      .addTo(policeLayersGroup)
+      .bindPopup(
+        `<b>🚓 ${ps.name}</b><br/><span style="font-size:11px;color:#475569;">${ps.zone}</span><br/>` +
+        `<span style="display:inline-block;margin-top:4px;font-family:monospace;font-weight:700;color:#0f172a;">Ref Tel: ${ps.phone} (Display Only)</span>`
+      );
+  });
+}
+
+function getRankedPoliceStations(lat, lng) {
+  const pool = activeAreaStations.length > 0 ? activeAreaStations : CONFIG.POLICE_STATIONS;
+  return pool
+    .map((ps) => ({ ...ps, airKm: getAirDistanceKm(lat, lng, ps.lat, ps.lng), estRoadKm: estimateRoadDistanceKm(lat, lng, ps.lat, ps.lng) }))
+    .sort((a, b) => a.airKm - b.airKm);
+}
+
+function getNearestPolice(lat, lng) {
+  if (selectedTargetStation) {
+    return { ...selectedTargetStation, airKm: getAirDistanceKm(lat, lng, selectedTargetStation.lat, selectedTargetStation.lng) };
+  }
+  return getRankedPoliceStations(lat, lng)[0];
+}
+
+async function computeGoogleMapsRoadRoute(startLat, startLng, targetStation) {
+  if (!targetStation) return;
+  const airKm = getAirDistanceKm(startLat, startLng, targetStation.lat, targetStation.lng);
+  const inCoimbatore = isInsideCoimbatoreDistrict(startLat, startLng);
+  const cacheKey = `${startLat.toFixed(3)},${startLng.toFixed(3)}->${targetStation.lat.toFixed(4)},${targetStation.lng.toFixed(4)}`;
+
+  let routeData = roadRouteCache.get(cacheKey);
+  if (!routeData && inCoimbatore) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
+      const url = `${CONFIG.OSRM_ROUTE_URL}/${startLng},${startLat};${targetStation.lng},${targetStation.lat}?overview=full&geometries=geojson`;
+      const res = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        const route = data.routes && data.routes[0];
+        if (route && Array.isArray(route.geometry?.coordinates)) {
+          routeData = {
+            roadKm: Number((route.distance / 1000).toFixed(2)),
+            durationMins: Math.max(1, Math.round(route.duration / 60)),
+            coords: route.geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+            source: "OSRM ROAD"
+          };
+          roadRouteCache.set(cacheKey, routeData);
+        }
+      }
+    } catch (e) {}
+  }
+
+  if (!routeData) {
+    const estKm = estimateRoadDistanceKm(startLat, startLng, targetStation.lat, targetStation.lng);
+    routeData = {
+      roadKm: estKm,
+      durationMins: Math.max(2, Math.round((estKm / 32) * 60)),
+      coords: inCoimbatore
+        ? [[startLat, startLng], [(startLat + targetStation.lat) / 2 + 0.002, (startLng + targetStation.lng) / 2 - 0.002], [targetStation.lat, targetStation.lng]]
+        : [],
+      source: inCoimbatore ? "EST. ROAD" : "CBE REF ONLY"
+    };
+  }
+
+  currentRoadMetrics = { roadKm: routeData.roadKm, airKm, durationMins: routeData.durationMins, summary: `To ${targetStation.name}`, source: routeData.source, coords: routeData.coords };
+
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+  setTxt("rrSourceTag", routeData.source);
+
+  if (inCoimbatore) {
+    setTxt("rrRoadKm", `${routeData.roadKm.toFixed(1)} km`);
+    setTxt("rrRoadMins", `~${routeData.durationMins} min drive`);
+    setTxt("rrSummary", `Road route to ${targetStation.name} (${targetStation.zone.split("(")[0].trim()})`);
+    setTxt("rrCompare", `Air displacement: ${airKm.toFixed(1)} km • Driving road: ${routeData.roadKm.toFixed(1)} km`);
+    setTxt("activePsDist", `${routeData.roadKm.toFixed(1)} km`);
+    setTxt("activePsEta", `~${routeData.durationMins} mins`);
+    setTxt("policeText", `🚓 ${targetStation.name.split(" ")[0]} (${routeData.roadKm.toFixed(1)}km)`);
+  } else {
+    setTxt("rrRoadKm", "Outside CBE");
+    setTxt("rrRoadMins", "v1.0 CBE Only");
+    setTxt("rrSummary", `Pin is outside Coimbatore District. Nearest CBE ref: ${targetStation.name}`);
+    setTxt("rrCompare", `v1.0 shows Coimbatore District stations only (Multi-district in v2.0)`);
+    setTxt("activePsDist", "Outside CBE Dist.");
+    setTxt("activePsEta", "v2.0 Expansion");
+    setTxt("policeText", `🚓 CBE Ref: ${targetStation.name.split(" ")[0]}`);
+  }
+
+  if (roadRouteOutline && roadRouteLine) {
+    roadRouteOutline.setLatLngs(showRoadRoute ? routeData.coords : []);
+    roadRouteLine.setLatLngs(showRoadRoute ? routeData.coords : []);
+  }
+}
+
+function selectStationForRoadRouting(idx) {
+  if (!currentCoords) return;
+  const ranked = getRankedPoliceStations(currentCoords.lat, currentCoords.lng).slice(0, 4);
+  if (ranked[idx]) {
+    selectedTargetStation = ranked[idx];
+    updatePoliceCoverageUI(currentCoords.lat, currentCoords.lng, true);
+  }
+}
+
+function updatePoliceCoverageUI(lat, lng, triggerToast = false) {
+  const ranked = getRankedPoliceStations(lat, lng);
+  const activePs = selectedTargetStation
+    ? { ...selectedTargetStation, airKm: getAirDistanceKm(lat, lng, selectedTargetStation.lat, selectedTargetStation.lng) }
+    : ranked[0];
+
+  if (!activePs) return { name: "Sulur Police Station", phone: "0422-2687233", airKm: 0 };
+
+  const inCoimbatore = isInsideCoimbatoreDistrict(lat, lng);
+  const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.innerText = v; };
+  setTxt("activePsName", inCoimbatore ? activePs.name : `${activePs.name} (Coimbatore Dist. Ref)`);
+  setTxt("activePsZone", `Jurisdiction: ${activePs.zone}`);
+  setTxt("activePsAirDist", inCoimbatore ? `${activePs.airKm.toFixed(1)} km` : "Outside CBE");
+  setTxt("activePsPhone", activePs.phone);
+
+  const gmapsLink = document.getElementById("hudGmapsLink");
+  if (gmapsLink) {
+    gmapsLink.href = `https://www.google.com/maps/dir/?api=1&origin=${lat.toFixed(5)},${lng.toFixed(5)}&destination=${activePs.lat.toFixed(5)},${activePs.lng.toFixed(5)}&travelmode=driving`;
+  }
+  if (activeStationHighlight) activeStationHighlight.setLatLng([activePs.lat, activePs.lng]);
+
+  const panelEl = document.getElementById("policeCoveragePanel");
+  if (lastActivePoliceName && lastActivePoliceName !== activePs.name && panelEl) {
+    panelEl.classList.add("station-switched");
+    setTimeout(() => panelEl.classList.remove("station-switched"), 1400);
+    if (triggerToast) showToast(`🚓 Coimbatore Police Info switched to ${activePs.name}`);
+  }
+  lastActivePoliceName = activePs.name;
+
+  const gridEl = document.getElementById("nearbyStationsGrid");
+  if (gridEl) {
+    gridEl.innerHTML = ranked.slice(0, 4).map((st, idx) => {
+      const isSelected = st.name === activePs.name;
+      const distLabel = inCoimbatore ? `~${st.estRoadKm.toFixed(1)} km road` : "Coimbatore Dist.";
+      return `<div class="pc-mini-card ${isSelected ? "nearest" : ""}" onclick="selectStationForRoadRouting(${idx})">
+        <div class="pc-mini-name">${isSelected ? "🟢 " : "🚓 "}${st.name}</div>
+        <div class="pc-mini-meta"><span>${distLabel}</span><span class="pc-mini-tel">${st.phone}</span></div>
+      </div>`;
+    }).join("");
+  }
+
+  computeGoogleMapsRoadRoute(lat, lng, activePs);
+  return activePs;
+}
+
+async function applyLocationFromScreenshot(extractedPlace) {
+  if (!extractedPlace) return "";
+  const bias = currentCoords ? [currentCoords.lat, currentCoords.lng] : CONFIG.COIMBATORE_CENTER;
+
+  const rawParts = String(extractedPlace).split(",").map((s) => s.trim()).filter(Boolean);
+  const queriesToTry = [String(extractedPlace).trim()];
+  if (rawParts.length >= 2) queriesToTry.push(rawParts.slice(-2).join(", "));
+  if (rawParts.length >= 3) queriesToTry.push(rawParts.slice(-3).join(", "));
+  const strippedPrefix = String(extractedPlace).replace(/^(?:near|opp\.?|opposite|behind|beside|front\s+of|no\.?\s*[\w/-]+)\s+/i, "").trim();
+  if (strippedPrefix && !queriesToTry.includes(strippedPrefix)) queriesToTry.push(strippedPrefix);
+
+  let resolved = null;
+  for (const q of queriesToTry) {
+    resolved = await resolvePlaceCoordinates(q, bias);
+    if (resolved) break;
+  }
+
+  const badge = document.getElementById("ocrLocationBadge");
+  const textEl = document.getElementById("ocrExtractedLocationText");
+
+  if (!resolved) {
+    if (badge && textEl) {
+      textEl.innerText = `${extractedPlace} (pin unmapped)`;
+      badge.classList.remove("hidden");
+    }
+    return "";
+  }
+
+  selectedTargetStation = null;
+  currentAddress = resolved.place;
+  lastGeocodeTime = Date.now();
+  liveTrailCoords = [];
+  if (liveTrailLine) liveTrailLine.setLatLngs([]);
+
+  if (badge && textEl) {
+    textEl.innerText = resolved.place;
+    badge.classList.remove("hidden");
+  }
+
+  const hudAddrEl = document.getElementById("hudAddress");
+  if (hudAddrEl) {
+    hudAddrEl.innerText = resolved.place;
+    hudAddrEl.title = resolved.place;
+  }
+
+  await updatePosition(resolved.coords[0], resolved.coords[1], 12, 0, 0);
+  await discoverNearbyPoliceStations(resolved.coords[0], resolved.coords[1], true);
+
+  if (riderMarker) riderMarker.bindPopup(`<b>📍 Location from Uploaded Screenshot</b><br/>${resolved.place}`).openPopup();
+  if (map) map.setView(resolved.coords, 14);
+  return resolved.place;
 }
 
 function initMap() {
-  if (map) { map.invalidateSize(); return; }
+  if (typeof L === "undefined") {
+    showToast("❌ Map library failed to load. Check internet connectivity.");
+    return;
+  }
+  if (map) {
+    map.invalidateSize();
+    return;
+  }
 
-  map = L.map("map", { zoomControl: true }).setView([currentCoords.lat, currentCoords.lng], 13);
+  const startLat = currentCoords ? currentCoords.lat : 11.0168;
+  const startLng = currentCoords ? currentCoords.lng : 76.9674;
 
-  streetGroup = L.tileLayer(CONFIG.MAP_TILES.STREET, {
-    attribution: "Tiles &copy; Esri &amp; OpenStreetMap",
-    maxZoom: 19
-  });
+  map = L.map("map", { zoomControl: true }).setView([startLat, startLng], 13);
 
+  streetGroup = L.tileLayer(CONFIG.MAP_TILES.STREET, { attribution: "Tiles &copy; Esri", maxZoom: 19 });
   darkGroup = L.layerGroup([
     L.tileLayer(CONFIG.MAP_TILES.DARK_BASE, { attribution: "Tiles &copy; Esri", maxZoom: 19 }),
     L.tileLayer(CONFIG.MAP_TILES.DARK_LABELS, { maxZoom: 19 })
   ]);
-
   satelliteGroup = L.layerGroup([
     L.tileLayer(CONFIG.MAP_TILES.SATELLITE, { attribution: "Tiles &copy; Esri", maxZoom: 19 }),
     L.tileLayer(CONFIG.MAP_TILES.SATELLITE_LABELS, { maxZoom: 19 })
@@ -442,51 +857,56 @@ function initMap() {
 
   streetGroup.addTo(map);
 
-  routeLine = L.polyline(CONFIG.DEMO_ROUTE, { color: "#0284c7", weight: 4, opacity: 0.5, dashArray: "6, 8" }).addTo(map);
-  liveTrailLine = L.polyline([], { color: "#2563eb", weight: 5, opacity: 0.95 }).addTo(map);
-  policeVectorLine = L.polyline([], { color: "#ef4444", weight: 3, dashArray: "6, 6" }).addTo(map);
+  liveTrailLine = L.polyline([], { color: "#22d3ee", weight: 4.5, opacity: 0.92 }).addTo(map);
+  roadRouteOutline = L.polyline([], { color: "#1e3a8a", weight: 8, opacity: 0.55 }).addTo(map);
+  roadRouteLine = L.polyline([], { color: "#3b82f6", weight: 4.5, opacity: 0.95 }).addTo(map);
 
-  riderMarker = L.marker([currentCoords.lat, currentCoords.lng]).addTo(map).bindPopup("<b>Rider Live Location</b>");
-  accuracyCircle = L.circle([currentCoords.lat, currentCoords.lng], {
-    radius: 25, color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.16, weight: 1.5
-  }).addTo(map);
+  riderMarker = L.marker([startLat, startLng], { draggable: true })
+    .addTo(map)
+    .bindPopup("<b>Rider Starting / Live Location</b><br/><span style='font-size:11px;color:#475569;'>Drag pin to fine-tune exact street</span>");
 
-  const initialNearest = getNearestPolice(currentCoords.lat, currentCoords.lng);
-  activeStationHighlight = L.circle([initialNearest.lat, initialNearest.lng], {
-    radius: 950, color: "#10b981", fillColor: "#10b981", fillOpacity: 0.12, weight: 2.5
-  }).addTo(map);
-
-  CONFIG.POLICE_STATIONS.forEach((ps) => {
-    L.circle([ps.lat, ps.lng], {
-      radius: 800, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.11, weight: 1.2
-    }).addTo(map);
-
-    L.circleMarker([ps.lat, ps.lng], {
-      radius: 7, color: "#fff", fillColor: "#ef4444", fillOpacity: 1, weight: 2
-    }).addTo(map).bindPopup(
-      `<b>🚓 ${ps.name}</b><br/>` +
-      `<span style="font-size:11px;color:#475569;">${ps.zone}</span><br/>` +
-      `<span style="display:inline-block;margin-top:4px;font-family:monospace;font-weight:700;color:#0f172a;">Ref Tel: ${ps.phone} (Display Only)</span>`
-    );
+  riderMarker.on("dragend", (ev) => {
+    const pos = ev.target.getLatLng();
+    selectedTargetStation = null;
+    lastGeocodeTime = 0;
+    updatePosition(pos.lat, pos.lng, 10, 0, 0);
+    showToast("📍 Pin adjusted manually to exact location.");
   });
 
+  accuracyCircle = L.circle([startLat, startLng], { radius: 25, color: "#2563eb", fillColor: "#3b82f6", fillOpacity: 0.16, weight: 1.5 }).addTo(map);
+
+  const initialNearest = getNearestPolice(startLat, startLng);
+  activeStationHighlight = L.circle([initialNearest.lat, initialNearest.lng], { radius: 950, color: "#10b981", fillColor: "#10b981", fillOpacity: 0.12, weight: 2.5 }).addTo(map);
+  policeLayersGroup = L.layerGroup().addTo(map);
+  renderPoliceMarkersOnMap();
+
   map.on("click", (e) => {
+    selectedTargetStation = null;
     lastGeocodeTime = 0;
     updatePosition(e.latlng.lat, e.latlng.lng, 12, 28, 45);
   });
-
-  updatePoliceVector();
 }
 
-function stepCoimbatoreCorridor() {
-  const idx = demoStep % CONFIG.DEMO_ROUTE.length;
-  const pt = CONFIG.DEMO_ROUTE[idx];
-  const label = CONFIG.DEMO_ROUTE_LABELS[idx];
-  currentAddress = label;
-  document.getElementById("hudAddress").innerText = label;
-  lastGeocodeTime = Date.now();
-  updatePosition(pt[0], pt[1], 10, 34, 25);
-  demoStep++;
+function toggleMapLayer() {
+  if (!map) return;
+  const btn = document.getElementById("layerBtn");
+  [streetGroup, darkGroup, satelliteGroup].forEach((grp) => {
+    if (grp && map.hasLayer(grp)) map.removeLayer(grp);
+  });
+
+  if (currentLayerMode === "street") {
+    currentLayerMode = "dark";
+    darkGroup.addTo(map);
+    if (btn) btn.innerText = "🌑 Dark Radar";
+  } else if (currentLayerMode === "dark") {
+    currentLayerMode = "satellite";
+    satelliteGroup.addTo(map);
+    if (btn) btn.innerText = "🛰️ Satellite";
+  } else {
+    currentLayerMode = "street";
+    streetGroup.addTo(map);
+    if (btn) btn.innerText = "🗺️ Street Map";
+  }
 }
 
 function toggleGpsMode() {
@@ -495,74 +915,51 @@ function toggleGpsMode() {
   btn.innerText = isLiveGps ? "📍 Mode: Real GPS" : "📍 Mode: Demo";
   btn.classList.toggle("active", isLiveGps);
   if (isLiveGps) pinpointMyLocation();
-  else showToast("Switched to Coimbatore Corridor Demo Mode.");
+  else showToast("Switched to Road-Routed Demo Mode.");
 }
 
-function pinpointMyLocation() {
-  if (!navigator.geolocation) return showToast("Geolocation is not supported on this browser.");
+async function pinpointMyLocation() {
   const sigEl = document.getElementById("hudSignal");
   sigEl.className = "sig-badge fair";
   sigEl.innerText = "LOCKING GPS...";
-  showToast("🛰️ Acquiring high-precision satellite lock...");
+  showToast("🛰️ Acquiring high-accuracy satellite GPS (waiting for sharpest fix)...");
 
-  let bestPos = null;
-  let lockWatch = null;
+  const result = await acquireBestLocation((msg) => {
+    const match = msg.match(/±\d+m/);
+    if (sigEl && match) sigEl.innerText = `REFINING ${match[0]}`;
+  });
 
-  const finishLock = async (pos) => {
-    if (lockWatch !== null) navigator.geolocation.clearWatch(lockWatch);
-    if (!pos) return;
-    const speedKmh = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 0;
-    lastGeocodeTime = 0;
-    await updatePosition(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy, speedKmh, pos.coords.heading || 0);
-    if (map) map.setView([pos.coords.latitude, pos.coords.longitude], 16);
-    showToast(`🎯 Exact Location Locked (±${Math.round(pos.coords.accuracy)}m)`);
-  };
-
-  const timer = setTimeout(() => finishLock(bestPos), CONFIG.GPS_LOCK_MAX_WAIT_MS);
-
-  lockWatch = navigator.geolocation.watchPosition(
-    (pos) => {
-      if (!bestPos || pos.coords.accuracy < bestPos.coords.accuracy) {
-        bestPos = pos;
-        sigEl.innerText = `LOCKING ±${Math.round(pos.coords.accuracy)}m`;
-      }
-      if (pos.coords.accuracy <= CONFIG.GPS_LOCK_TARGET_METERS) {
-        clearTimeout(timer);
-        finishLock(pos);
-      }
-    },
-    (err) => {
-      clearTimeout(timer);
-      sigEl.className = "sig-badge weak";
-      sigEl.innerText = "GPS BLOCKED";
-      showToast(`GPS Error (${err.message}). Enable location permission.`);
-    },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-  );
-}
-
-function toggleMapLayer() {
-  const btn = document.getElementById("layerBtn");
-  map.removeLayer(streetGroup);
-  map.removeLayer(darkGroup);
-  map.removeLayer(satelliteGroup);
-
-  if (currentLayerMode === "street") {
-    currentLayerMode = "dark";
-    darkGroup.addTo(map);
-    btn.innerText = "🌑 Dark Radar";
-    btn.classList.add("active");
-  } else if (currentLayerMode === "dark") {
-    currentLayerMode = "satellite";
-    satelliteGroup.addTo(map);
-    btn.innerText = "📡 Satellite";
-    btn.classList.add("active");
-  } else {
-    currentLayerMode = "street";
-    streetGroup.addTo(map);
-    btn.innerText = "🗺️ Street Map";
-    btn.classList.remove("active");
+  if (result.source === "failed") {
+    sigEl.className = "sig-badge weak";
+    sigEl.innerText = result.policyBlocked ? "SANDBOX BLOCKED" : "GPS UNAVAILABLE";
+    return showToast(
+      result.policyBlocked
+        ? "Preview iframe blocks hardware GPS (IP guess skipped to avoid wrong district). Search your area below or drag the blue pin."
+        : result.errorCode === 1
+          ? "Location blocked: tap 🔒 in browser address bar → Allow Location, then retry."
+          : "No satellite GPS lock indoors. Enable High-Accuracy Location on your device or drag the map pin."
+    );
   }
+
+  if (result.source === "coarse_rejected") {
+    sigEl.className = "sig-badge weak";
+    sigEl.innerText = `COARSE ±${result.accuracy}m`;
+    return showToast(
+      `⚠️ Ignored coarse cell/Wi-Fi reading (±${result.accuracy}m) to prevent wrong district jump. Step near a window & retry, or drag the blue pin.`
+    );
+  }
+
+  selectedTargetStation = null;
+  lastGeocodeTime = 0;
+  await discoverNearbyPoliceStations(result.lat, result.lng, true);
+  await updatePosition(result.lat, result.lng, result.accuracy, result.speedKmh || 0, result.heading || 0);
+  if (map) map.setView([result.lat, result.lng], result.accuracy <= 100 ? 16 : 14);
+
+  showToast(
+    result.source === "gps"
+      ? `🎯 Exact Satellite GPS Locked (±${result.accuracy}m)`
+      : `⚠️ Moderate GPS Lock (±${result.accuracy}m) — drag blue pin if slightly off.`
+  );
 }
 
 function toggleAutoFollow() {
@@ -573,32 +970,24 @@ function toggleAutoFollow() {
 }
 
 function togglePoliceVector() {
-  showPoliceVec = !showPoliceVec;
-  document.getElementById("vectorBtn").classList.toggle("active", showPoliceVec);
-  updatePoliceVector();
-}
-
-function updatePoliceVector() {
-  if (!policeVectorLine) return;
-  if (!showPoliceVec) {
-    policeVectorLine.setLatLngs([]);
-    return;
+  showRoadRoute = !showRoadRoute;
+  document.getElementById("vectorBtn").classList.toggle("active", showRoadRoute);
+  if (roadRouteLine && roadRouteOutline) {
+    roadRouteOutline.setLatLngs(showRoadRoute ? currentRoadMetrics.coords : []);
+    roadRouteLine.setLatLngs(showRoadRoute ? currentRoadMetrics.coords : []);
   }
-  const ps = getNearestPolice(currentCoords.lat, currentCoords.lng);
-  policeVectorLine.setLatLngs([[currentCoords.lat, currentCoords.lng], [ps.lat, ps.lng]]);
 }
 
-/* ======================================================================= */
-/* 4. AI-BASED SAFETY ANALYTICS & RISK PATTERN ENGINE                      */
-/* ======================================================================= */
+/* ===================================================================== */
+/* 5. AI SAFETY ANALYTICS, SAFE RIDE TELEMETRY & CHECK-INS               */
+/* ===================================================================== */
 function evaluateRiskAnalytics() {
+  if (!currentCoords) return 96;
   let score = 96;
   const indicators = [];
-
   const currentPlate = document.getElementById("vehicleNumber")?.value.trim();
-  const mismatchActive = typeof isPlateMismatch !== "undefined" && isPlateMismatch;
 
-  if (mismatchActive) {
+  if (typeof isPlateMismatch !== "undefined" && isPlateMismatch) {
     score -= 42;
     indicators.push({ text: "🚨 Vehicle Registration Mismatch Detected!", warn: true });
   } else if (currentPlate) {
@@ -615,34 +1004,27 @@ function evaluateRiskAnalytics() {
     score -= 28;
     indicators.push({ text: "⏸️ Unusual Mid-Route Vehicle Stop", warn: true });
   } else {
-    indicators.push({ text: "✅ Expected Corridor Trajectory Normal", warn: false });
+    indicators.push({ text: "✅ Highway Road Trajectory Normal", warn: false });
   }
 
   const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
-  if (nearestPs.distKm <= 4.5) {
-    indicators.push({ text: `🚓 ${nearestPs.name} (${nearestPs.distKm.toFixed(1)} km)`, warn: false });
-  } else {
-    score -= 8;
-    indicators.push({ text: `⚠️ Nearest Police ${nearestPs.distKm.toFixed(1)} km away`, warn: true });
-  }
-
-  const hr = new Date().getHours();
-  if (hr >= 22 || hr < 5) {
-    score -= 6;
-    indicators.push({ text: "🌙 Night Transit Watch Active", warn: false });
-  }
+  const inCbe = isInsideCoimbatoreDistrict(currentCoords.lat, currentCoords.lng);
+  indicators.push({
+    text: inCbe
+      ? `🛣️ ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(1)} km road)`
+      : `ℹ️ Coimbatore District Info Only (Pin outside CBE)`,
+    warn: inCbe && currentRoadMetrics.roadKm > 15
+  });
 
   score = Math.max(12, Math.min(99, score));
   const scoreEl = document.getElementById("riskScoreValue");
   const badgeEl = document.getElementById("riskLevelBadge");
   const fillEl = document.getElementById("riskMeterFill");
   const listEl = document.getElementById("riskIndicators");
-
   if (!scoreEl) return score;
 
   scoreEl.innerText = `${score} / 100`;
   fillEl.style.width = `${score}%`;
-
   if (score >= 75) {
     scoreEl.className = "risk-score-num";
     badgeEl.className = "risk-pill";
@@ -660,16 +1042,10 @@ function evaluateRiskAnalytics() {
     fillEl.style.background = "linear-gradient(90deg, #ef4444, #f87171)";
   }
 
-  listEl.innerHTML = indicators
-    .map((item) => `<li class="${item.warn ? "warn-item" : ""}">${item.text}</li>`)
-    .join("");
-
+  listEl.innerHTML = indicators.map((item) => `<li class="${item.warn ? "warn-item" : ""}">${item.text}</li>`).join("");
   return score;
 }
 
-/* ======================================================================= */
-/* 5. TELEMETRY UPDATES, SAFETY CHECK-INS, JOURNEY LOG & LIVE SHARE        */
-/* ======================================================================= */
 function triggerSafetyCheckIn(type) {
   activeSafetyAlertType = type;
   alertsTriggeredCount++;
@@ -687,13 +1063,12 @@ function triggerSafetyCheckIn(type) {
   } else {
     banner.classList.remove("amber");
     titleEl.innerText = "⚠️ ROUTE DEVIATION DETECTED!";
-    subEl.innerText = "Off Coimbatore corridor. Auto-SOS to trusted contacts in";
+    subEl.innerText = "Off assigned road route. Auto-SOS to trusted contacts in";
   }
 
   let secs = 10;
   cdEl.innerText = secs;
   banner.classList.remove("hidden");
-
   clearInterval(safetyCheckInterval);
   safetyCheckInterval = setInterval(() => {
     secs--;
@@ -701,8 +1076,7 @@ function triggerSafetyCheckIn(type) {
     if (secs <= 0) {
       clearInterval(safetyCheckInterval);
       banner.classList.add("hidden");
-      const reason = type === "UNUSUAL_STOP" ? "UNCONFIRMED UNUSUAL STOP" : "UNCONFIRMED ROUTE DEVIATION";
-      triggerManualSOS(reason);
+      triggerManualSOS(type === "UNUSUAL_STOP" ? "UNCONFIRMED UNUSUAL STOP" : "UNCONFIRMED ROUTE DEVIATION");
     }
   }, 1000);
 }
@@ -722,38 +1096,28 @@ function confirmSafe() {
 function toggleJourneyDrawer() {
   const drawer = document.getElementById("journeyDrawer");
   const btn = document.getElementById("historyBtn");
-  const isHidden = drawer.classList.toggle("hidden");
-  btn.classList.toggle("active", !isHidden);
+  btn.classList.toggle("active", !drawer.classList.toggle("hidden"));
 }
 
 function recordJourneyWaypoint(lat, lng, speedKmh, label, stationName) {
   const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   journeyHistory.unshift({ time, lat, lng, speedKmh, label, stationName });
   if (journeyHistory.length > 30) journeyHistory.pop();
-
   const countEl = document.getElementById("journeyCount");
   const listEl = document.getElementById("journeyEntries");
   if (countEl) countEl.innerText = `${journeyHistory.length} pts`;
   if (listEl) {
-    listEl.innerHTML = journeyHistory
-      .map((pt) => `<div>[${pt.time}] ${pt.label} • 🚓 ${pt.stationName.split(" ")[0]}</div>`)
-      .join("");
+    listEl.innerHTML = journeyHistory.map((pt) => `<div>[${pt.time}] ${pt.label} • 🛣️ ${currentRoadMetrics.roadKm.toFixed(1)}km to ${pt.stationName.split(" ")[0]}</div>`).join("");
   }
 }
 
 function shareLiveLocation() {
-  const driver = document.getElementById("driverName").value || "Ramesh K.";
+  if (!currentCoords) return;
+  const driver = document.getElementById("driverName").value || "Not Scanned";
   const vehicle = document.getElementById("vehicleNumber").value || "TN-38-AB-1234";
   const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
   const mapsUrl = `https://maps.google.com/?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
-  const shareText =
-    `🛡️ RideGuard AI Live Trip Share (Coimbatore)\n` +
-    `Rider: ${activeProfile?.name || "Rider"}\n` +
-    `Driver: ${driver} | Vehicle: ${vehicle}\n` +
-    `Location: ${currentAddress}\n` +
-    `Nearest Police (Ref): ${nearestPs.name} (${nearestPs.phone})\n` +
-    `Track Live Pin: ${mapsUrl}`;
-
+  const shareText = `🛡️ RideGuard AI Live Trip Share\nRider: ${activeProfile?.name || "Rider"}\nDriver: ${driver} | Vehicle: ${vehicle}\nLocation: ${currentAddress}\nCoimbatore Dist. Police (Info Only): ${nearestPs.name} • Tel: ${nearestPs.phone}\nTrack Live Pin: ${mapsUrl}`;
   copyTextFallback(shareText);
   const primaryPhone = activeProfile?.contacts?.[0]?.phone?.replace(/\D/g, "") || "";
   if (primaryPhone) {
@@ -765,6 +1129,7 @@ function shareLiveLocation() {
 }
 
 function startSafeRide() {
+  if (!currentCoords) return showToast("Please set your starting location first.");
   isRideActive = true;
   isPhonePoweredOff = false;
   rideStartTime = Date.now();
@@ -786,7 +1151,6 @@ function startSafeRide() {
   badge.classList.remove("danger");
   setHeartbeatUI(true);
   if (liveTrailLine) liveTrailLine.setLatLngs([]);
-
   syncShadowVaultSnapshot();
 
   if (isLiveGps && navigator.geolocation) {
@@ -802,22 +1166,31 @@ function startSafeRide() {
     );
   } else {
     clearInterval(demoTimer);
-    demoStep = 0;
-    stepCoimbatoreCorridor();
+    let roadIdx = 0;
+    const fallbackStepPts = [
+      [currentCoords.lat, currentCoords.lng],
+      [currentCoords.lat + 0.0045, currentCoords.lng + 0.0042],
+      [currentCoords.lat + 0.0092, currentCoords.lng + 0.0085],
+      [currentCoords.lat + 0.0138, currentCoords.lng + 0.0124]
+    ];
+    const roadPts = currentRoadMetrics.coords && currentRoadMetrics.coords.length >= 2 ? currentRoadMetrics.coords : fallbackStepPts;
+    updatePosition(roadPts[0][0], roadPts[0][1], 10, 36, 192);
+    roadIdx = 1;
     demoTimer = setInterval(() => {
-      stepCoimbatoreCorridor();
-    }, 2800);
+      const pt = roadPts[roadIdx % roadPts.length];
+      updatePosition(pt[0], pt[1], 10, 38, 185);
+      roadIdx++;
+    }, 2600);
   }
 
   sendHeartbeat();
   clearInterval(heartbeatTimer);
   heartbeatTimer = setInterval(sendHeartbeat, CONFIG.HEARTBEAT_INTERVAL_MS);
-  showToast("🛡️ Safe Ride active across Coimbatore Police Radar Corridor.");
+  showToast("🛡️ Safe Ride active along live road network.");
 }
 
 async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0, silentInit = false) {
   if (isPhonePoweredOff) return;
-
   if (liveTrailCoords.length > 0 && !silentInit) {
     const prev = liveTrailCoords[liveTrailCoords.length - 1];
     totalDistanceKm += getDistanceKm(prev[0], prev[1], lat, lng);
@@ -831,10 +1204,8 @@ async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0
   }
 
   if (isRideActive && speedKmh === 0 && !silentInit) {
-    stationarySeconds += 2.8;
-    if (stationarySeconds >= 15 && !activeSafetyAlertType) {
-      triggerSafetyCheckIn("UNUSUAL_STOP");
-    }
+    stationarySeconds += 2.6;
+    if (stationarySeconds >= 15 && !activeSafetyAlertType) triggerSafetyCheckIn("UNUSUAL_STOP");
   } else {
     stationarySeconds = 0;
   }
@@ -845,7 +1216,7 @@ async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0
   if (autoFollow && map) map.panTo([lat, lng]);
 
   const nearestPs = updatePoliceCoverageUI(lat, lng, !silentInit);
-  if (showPoliceVec) updatePoliceVector();
+  discoverNearbyPoliceStations(lat, lng, false);
 
   const sigEl = document.getElementById("hudSignal");
   sigEl.className = "sig-badge" + (accuracy > 80 ? " weak" : accuracy > 30 ? " fair" : "");
@@ -855,9 +1226,6 @@ async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0
   document.getElementById("hudDist").innerText = `${totalDistanceKm.toFixed(2)} km`;
   document.getElementById("hudCoords").innerText = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 
-  const gmapsLink = document.getElementById("hudGmapsLink");
-  if (gmapsLink) gmapsLink.href = `https://maps.google.com/?q=${lat.toFixed(6)},${lng.toFixed(6)}`;
-
   if (Date.now() - lastGeocodeTime > 12000) {
     lastGeocodeTime = Date.now();
     currentAddress = await reverseGeocode(lat, lng);
@@ -866,17 +1234,16 @@ async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = 0
     addrEl.title = currentAddress;
   }
 
-  if (!silentInit) {
-    recordJourneyWaypoint(lat, lng, speedKmh, currentAddress.split(",")[0], nearestPs.name);
-  }
+  if (!silentInit) recordJourneyWaypoint(lat, lng, speedKmh, currentAddress.split(",")[0], nearestPs.name);
   syncShadowVaultSnapshot();
   evaluateRiskAnalytics();
 }
 
-/* ======================================================================= */
-/* 6. CLOUD SHADOW VAULT & SUDDEN PHONE SHUTDOWN FINAL-LOCATION WATCHDOG   */
-/* ======================================================================= */
+/* ===================================================================== */
+/* 6. SUDDEN PHONE SHUTDOWN VAULT, OFFLINE QUEUE & SOS DISPATCH          */
+/* ===================================================================== */
 function syncShadowVaultSnapshot() {
+  if (!currentCoords) return;
   const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
   const nowTime = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
@@ -889,11 +1256,11 @@ function syncShadowVaultSnapshot() {
     address: currentAddress,
     timestamp: nowTime,
     isoTime: new Date().toISOString(),
-    driver: document.getElementById("driverName")?.value || "Ramesh K.",
+    driver: document.getElementById("driverName")?.value || "Not Scanned",
     vehicle: document.getElementById("vehicleNumber")?.value || "TN-38-AB-1234",
     policeName: nearestPs.name,
     policePhone: nearestPs.phone,
-    policeDistKm: nearestPs.distKm
+    policeRoadKm: currentRoadMetrics.roadKm
   };
 
   const box = document.getElementById("vaultSyncBox");
@@ -905,25 +1272,16 @@ function syncShadowVaultSnapshot() {
     box.classList.remove("frozen");
     if (titleEl) titleEl.innerText = "☁️ LAST-KNOWN FINAL PIN";
     if (timeEl) timeEl.innerText = nowTime;
-    if (coordsEl) {
-      coordsEl.innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} • ${currentAddress.split(",")[0]}`;
-    }
+    if (coordsEl) coordsEl.innerText = `${currentCoords.lat.toFixed(5)}, ${currentCoords.lng.toFixed(5)} • ${currentAddress.split(",")[0]}`;
   }
 
   if (isRideActive && activeProfile) {
     try {
-      localStorage.setItem(ACTIVE_RIDE_SNAPSHOT_KEY, JSON.stringify({
-        profile: activeProfile,
-        vault: lastKnownVault
-      }));
+      localStorage.setItem(ACTIVE_RIDE_SNAPSHOT_KEY, JSON.stringify({ profile: activeProfile, vault: lastKnownVault }));
     } catch (e) {}
   }
 }
 
-/**
- * Last-Gasp OS Shutdown Beacon: Fires via navigator.sendBeacon() the instant
- * the mobile OS powers off or closes the browser during an active ride.
- */
 function dispatchLastGaspShutdownBeacon() {
   if (!isRideActive || !activeProfile || !lastKnownVault) return;
   const payload = JSON.stringify({
@@ -934,11 +1292,9 @@ function dispatchLastGaspShutdownBeacon() {
     dispatch_police: false,
     final_location: lastKnownVault
   });
-
   try {
     if (navigator.sendBeacon) {
-      const blob = new Blob([payload], { type: "application/json" });
-      navigator.sendBeacon(`${CONFIG.API_BASE_URL}/sos`, blob);
+      navigator.sendBeacon(`${CONFIG.API_BASE_URL}/sos`, new Blob([payload], { type: "application/json" }));
     }
   } catch (e) {}
 }
@@ -963,39 +1319,25 @@ async function initBattery() {
         currentBattery = Math.round(bat.level * 100);
         const batEl = document.getElementById("batteryText");
         if (batEl) batEl.innerText = `🔋 ${currentBattery}%`;
-
-        // Auto-trigger final location lock if battery hits <= 3% mid-drive
-        if (isRideActive && !isPhonePoweredOff && !bat.charging && currentBattery <= 3) {
-          testSwitchOff(true);
-        }
+        if (isRideActive && !isPhonePoweredOff && !bat.charging && currentBattery <= 3) testSwitchOff(true);
       };
       updateBat();
       bat.addEventListener("levelchange", updateBat);
     }
   } catch (e) {}
-  document.getElementById("batteryText").innerText = `🔋 ${currentBattery}%`;
+  const batEl = document.getElementById("batteryText");
+  if (batEl) batEl.innerText = `🔋 ${currentBattery}%`;
 }
 
-/* ======================================================================= */
-/* 7. OFFLINE QUEUE, HEARTBEAT & PERSONAL-CONTACTS-ONLY SOS DISPATCH       */
-/* ======================================================================= */
-function isNetworkOnline() {
-  return !simulatedOffline && navigator.onLine;
-}
+function isNetworkOnline() { return !simulatedOffline && navigator.onLine; }
 
 function loadOfflineQueue() {
-  try {
-    offlineOutbox = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY) || "[]");
-  } catch (e) {
-    offlineOutbox = [];
-  }
+  try { offlineOutbox = JSON.parse(localStorage.getItem(QUEUE_STORAGE_KEY) || "[]"); } catch (e) { offlineOutbox = []; }
   updateNetworkUI();
 }
 
 function saveOfflineQueue() {
-  try {
-    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(offlineOutbox));
-  } catch (e) {}
+  try { localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(offlineOutbox)); } catch (e) {}
   updateNetworkUI();
 }
 
@@ -1004,7 +1346,6 @@ function updateNetworkUI() {
   const qEl = document.getElementById("queueText");
   const btn = document.getElementById("offlineSimBtn");
   if (!netEl) return;
-
   const online = isNetworkOnline();
   netEl.innerText = online ? "ONLINE" : "OFFLINE (QUEUING)";
   netEl.className = online ? "hb-status" : "hb-status amber";
@@ -1015,11 +1356,8 @@ function updateNetworkUI() {
 function toggleOfflineSimulation() {
   simulatedOffline = !simulatedOffline;
   updateNetworkUI();
-  if (!simulatedOffline) {
-    flushOfflineQueue();
-  } else {
-    showToast("📴 Offline mode active. Heartbeats & SOS alerts will queue locally.");
-  }
+  if (!simulatedOffline) flushOfflineQueue();
+  else showToast("📴 Offline mode active. Heartbeats & SOS alerts will queue locally.");
 }
 
 function handleNetworkStateChange() {
@@ -1036,7 +1374,6 @@ function flushOfflineQueue() {
   if (!isNetworkOnline() || offlineOutbox.length === 0) return;
   const count = offlineOutbox.length;
   showToast(`🔄 Network restored! Auto-retrying ${count} queued alert(s) to personal contacts...`);
-
   offlineOutbox.forEach((item) => {
     fetch(`${CONFIG.API_BASE_URL}${item.type === "SOS" ? "/sos" : "/heartbeat"}`, {
       method: "POST",
@@ -1044,7 +1381,6 @@ function flushOfflineQueue() {
       body: JSON.stringify(item.payload)
     }).catch(() => {});
   });
-
   setTimeout(() => {
     offlineOutbox = [];
     saveOfflineQueue();
@@ -1053,7 +1389,7 @@ function flushOfflineQueue() {
 }
 
 function sendHeartbeat() {
-  if (!activeProfile) return;
+  if (!activeProfile || !currentCoords) return;
   const police = getNearestPolice(currentCoords.lat, currentCoords.lng);
   const packet = {
     user: activeProfile.name,
@@ -1066,16 +1402,11 @@ function sendHeartbeat() {
     accuracy_m: currentCoords.accuracy,
     speed_kmh: currentCoords.speedKmh,
     battery: currentBattery,
-    driver: document.getElementById("driverName").value || "Ramesh K.",
+    driver: document.getElementById("driverName").value || "Not Scanned",
     vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234",
-    nearest_police_ref: `${police.name} (${police.phone} • ${police.distKm.toFixed(1)} km)`
+    nearest_police_ref: `${police.name} (${police.phone} • Coimbatore Dist. Info Only)`
   };
-
-  if (!isNetworkOnline()) {
-    enqueueOfflinePacket("HEARTBEAT", packet);
-    return;
-  }
-
+  if (!isNetworkOnline()) return enqueueOfflinePacket("HEARTBEAT", packet);
   fetch(`${CONFIG.API_BASE_URL}/heartbeat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-RideGuard-Token": sessionToken },
@@ -1086,16 +1417,13 @@ function sendHeartbeat() {
 function setHeartbeatUI(online) {
   const status = document.getElementById("hbStatus");
   const dot = document.getElementById("hbDot");
-  status.innerText = online ? "ONLINE • SYNCING" : "PHONE SHUTDOWN DETECTED";
-  status.classList.toggle("offline", !online);
-  dot.classList.toggle("offline", !online);
+  if (status) {
+    status.innerText = online ? "ONLINE • SYNCING" : "PHONE SHUTDOWN DETECTED";
+    status.classList.toggle("offline", !online);
+  }
+  if (dot) dot.classList.toggle("offline", !online);
 }
 
-/**
- * Simulates or handles a sudden mobile phone shutdown mid-drive:
- * Freezes GPS at the exact stop spot, drops a red Final Stop Pin on the map,
- * and after 5s of silence dispatches that exact final location to personal contacts.
- */
 function testSwitchOff(isCriticalBattery = false) {
   if (watchId) navigator.geolocation.clearWatch(watchId);
   clearInterval(heartbeatTimer);
@@ -1105,7 +1433,6 @@ function testSwitchOff(isCriticalBattery = false) {
 
   isPhonePoweredOff = true;
   if (!lastKnownVault) syncShadowVaultSnapshot();
-
   setHeartbeatUI(false);
 
   const box = document.getElementById("vaultSyncBox");
@@ -1113,23 +1440,13 @@ function testSwitchOff(isCriticalBattery = false) {
   const coordsEl = document.getElementById("vaultSyncCoords");
   if (box) box.classList.add("frozen");
   if (titleEl) titleEl.innerText = "📵 FINAL STOP LOCATION LOCKED";
-  if (coordsEl && lastKnownVault) {
-    coordsEl.innerText = `${lastKnownVault.lat.toFixed(5)}, ${lastKnownVault.lng.toFixed(5)} • ${lastKnownVault.address}`;
-  }
+  if (coordsEl && lastKnownVault) coordsEl.innerText = `${lastKnownVault.lat.toFixed(5)}, ${lastKnownVault.lng.toFixed(5)} • ${lastKnownVault.address}`;
 
   if (map && lastKnownVault) {
     if (shutdownPinMarker) map.removeLayer(shutdownPinMarker);
     shutdownPinMarker = L.circleMarker([lastKnownVault.lat, lastKnownVault.lng], {
       radius: 11, color: "#fef2f2", fillColor: "#ef4444", fillOpacity: 0.95, weight: 3
-    })
-      .addTo(map)
-      .bindPopup(
-        `<b>📵 PHONE SHUTDOWN — FINAL STOP LOCATION</b><br/>` +
-        `Area: ${lastKnownVault.address}<br/>` +
-        `Coords: ${lastKnownVault.lat.toFixed(5)}, ${lastKnownVault.lng.toFixed(5)}<br/>` +
-        `Stopped At: ${lastKnownVault.timestamp}`
-      )
-      .openPopup();
+    }).addTo(map).bindPopup(`<b>📵 PHONE SHUTDOWN — FINAL STOP LOCATION</b><br/>Area: ${lastKnownVault.address}<br/>Stopped At: ${lastKnownVault.timestamp}`).openPopup();
     map.panTo([lastKnownVault.lat, lastKnownVault.lng]);
   }
 
@@ -1141,14 +1458,13 @@ function testSwitchOff(isCriticalBattery = false) {
   showToast(
     isCriticalBattery
       ? "🪫 Battery ≤3%! Locking final location & alerting trusted contacts in 5s..."
-      : `📵 Phone powered off at ${lastKnownVault.address.split(",")[0]}! Sending final location in 5s...`
+      : `📵 Phone powered off at ${lastKnownVault?.address?.split(",")[0] || "stop spot"}! Sending final location in 5s...`
   );
 
   switchOffCountdownInterval = setInterval(() => {
     secs--;
-    if (secs > 0) {
-      badge.innerText = `📵 PHONE SHUTDOWN — SENDING FINAL PIN IN ${secs}s`;
-    } else {
+    if (secs > 0) badge.innerText = `📵 PHONE SHUTDOWN — SENDING FINAL PIN IN ${secs}s`;
+    else {
       clearInterval(switchOffCountdownInterval);
       badge.innerText = "🚨 FINAL SHUTDOWN LOCATION DISPATCHED";
     }
@@ -1158,16 +1474,11 @@ function testSwitchOff(isCriticalBattery = false) {
     ? "CRITICAL BATTERY SHUTDOWN (≤3%) — FINAL LOCATION WHERE DRIVE STOPPED"
     : "SUDDEN PHONE SHUTDOWN — FINAL LOCATION WHERE DRIVE STOPPED";
 
-  switchOffTimer = setTimeout(() => {
-    triggerManualSOS(reason, lastKnownVault);
-  }, 5000);
+  switchOffTimer = setTimeout(() => triggerManualSOS(reason, lastKnownVault), 5000);
 }
 
-/**
- * Dispatches SOS alerts EXCLUSIVELY to the user's personal saved emergency contacts.
- * Nearest police station info is included strictly as plain reference text.
- */
 async function triggerManualSOS(reason, shutdownVault = null) {
+  if (!activeProfile) return;
   alertsTriggeredCount++;
   const locData = shutdownVault || {
     lat: currentCoords.lat,
@@ -1177,14 +1488,19 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     battery: currentBattery,
     address: currentAddress,
     timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-    driver: document.getElementById("driverName").value || "Ramesh K.",
+    driver: document.getElementById("driverName").value || "Not Scanned",
     vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234"
   };
 
   const police = getNearestPolice(locData.lat, locData.lng);
+  const inCbe = isInsideCoimbatoreDistrict(locData.lat, locData.lng);
+  const roadDist = estimateRoadDistanceKm(locData.lat, locData.lng, police.lat, police.lng);
   const mapsUrl = `https://maps.google.com/?q=${locData.lat.toFixed(6)},${locData.lng.toFixed(6)}`;
   const incidentId = `RG-${Math.floor(100000 + Math.random() * 900000)}`;
   const isShutdownEvent = Boolean(shutdownVault) || /SHUTDOWN/i.test(reason);
+  const policeInfoLine = inCbe
+    ? `Coimbatore Dist. Police (Info Only): ${police.name} (${roadDist.toFixed(1)} km by road) • Ref Tel: ${police.phone}`
+    : `Coimbatore Dist. Police (Info Only): ${police.name} • Ref Tel: ${police.phone}`;
 
   lastSosMessage =
     `🚨 RIDEGUARD AI ALERT [${incidentId}] (${reason})\n` +
@@ -1194,32 +1510,16 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     `Exact GPS Pin: ${locData.lat.toFixed(6)}, ${locData.lng.toFixed(6)} (±${locData.accuracy}m)\n` +
     `Time Stopped: ${locData.timestamp} | Speed at Stop: ${locData.speedKmh} km/h | Last Battery: ${locData.battery}%\n` +
     `Driver: ${locData.driver} | Vehicle: ${locData.vehicle}\n` +
-    `Nearest Police Station (Info Only): ${police.name} (${police.distKm.toFixed(1)} km) • Ref Tel: ${police.phone}\n` +
+    `${policeInfoLine}\n` +
     `Google Maps Pin: ${mapsUrl}`;
 
   document.getElementById("sosPayload").innerText = lastSosMessage;
-
-  const trackerEl = document.getElementById("deliveryTracker");
-  trackerEl.innerHTML = activeProfile.contacts
-    .map(
-      (c, idx) => `
-      <div class="delivery-item">
-        <div>
-          <strong>${c.name}</strong> <span style="color:var(--text-muted); font-size:11px;">(${c.phone})</span>
-        </div>
-        <span id="delivStatus_${idx}" class="deliv-badge sending">📡 Sending...</span>
-      </div>`
-    )
+  document.getElementById("deliveryTracker").innerHTML = activeProfile.contacts
+    .map((c, idx) => `<div class="delivery-item"><div><strong>${c.name}</strong> <span style="color:var(--text-muted); font-size:11px;">(${c.phone})</span></div><span id="delivStatus_${idx}" class="deliv-badge sending">📡 Sending...</span></div>`)
     .join("");
-
   document.getElementById("dispatchButtons").innerHTML = activeProfile.contacts
-    .map(
-      (c, idx) => `
-      <button class="btn btn-safe" onclick="openWhatsAppFallback(${idx})">💬 WhatsApp (${c.name})</button>
-      <button class="btn btn-purge" onclick="openSmsFallback(${idx})">📩 SMS (${c.name})</button>`
-    )
+    .map((c, idx) => `<button class="btn btn-safe" onclick="openWhatsAppFallback(${idx})">💬 WhatsApp (${c.name})</button><button class="btn btn-purge" onclick="openSmsFallback(${idx})">📩 SMS (${c.name})</button>`)
     .join("");
-
   document.getElementById("sosModal").classList.remove("hidden");
 
   const sosPacket = {
@@ -1237,10 +1537,7 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     enqueueOfflinePacket("SOS", sosPacket);
     activeProfile.contacts.forEach((_, idx) => {
       const el = document.getElementById(`delivStatus_${idx}`);
-      if (el) {
-        el.className = "deliv-badge queued";
-        el.innerText = "📦 Queued Offline (Will Retry)";
-      }
+      if (el) { el.className = "deliv-badge queued"; el.innerText = "📦 Queued Offline (Will Retry)"; }
     });
     return;
   }
@@ -1255,85 +1552,63 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     const el = document.getElementById(`delivStatus_${idx}`);
     if (!el) return;
     if (idx === 1) {
-      setTimeout(() => {
-        el.className = "deliv-badge retry";
-        el.innerText = "⚠️ Retrying (2/3)...";
-      }, 900);
-      setTimeout(() => {
-        const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        el.className = "deliv-badge ok";
-        el.innerText = `✅ Delivered (${t})`;
-      }, 2200);
+      setTimeout(() => { el.className = "deliv-badge retry"; el.innerText = "⚠️ Retrying (2/3)..."; }, 900);
+      setTimeout(() => { el.className = "deliv-badge ok"; el.innerText = `✅ Delivered (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })})`; }, 2200);
     } else {
-      setTimeout(() => {
-        const t = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        el.className = "deliv-badge ok";
-        el.innerText = `✅ Delivered (${t})`;
-      }, 1100);
+      setTimeout(() => { el.className = "deliv-badge ok"; el.innerText = `✅ Delivered (${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })})`; }, 1100);
     }
   });
 }
 
 function openWhatsAppFallback(index) {
-  const contact = activeProfile.contacts[index];
+  const contact = activeProfile?.contacts?.[index];
   if (!contact) return;
-  const phone = contact.phone.replace(/\D/g, "");
-  window.open(`https://wa.me/${phone}?text=${encodeURIComponent(lastSosMessage)}`, "_blank");
+  window.open(`https://wa.me/${contact.phone.replace(/\D/g, "")}?text=${encodeURIComponent(lastSosMessage)}`, "_blank");
 }
 
 function openSmsFallback(index) {
-  const contact = activeProfile.contacts[index];
+  const contact = activeProfile?.contacts?.[index];
   if (!contact) return;
   window.open(`sms:${contact.phone}?body=${encodeURIComponent(lastSosMessage)}`, "_self");
 }
 
-function closeSosModal() {
-  document.getElementById("sosModal").classList.add("hidden");
-}
+function closeSosModal() { document.getElementById("sosModal").classList.add("hidden"); }
 
-/* ======================================================================= */
-/* 8. RIDE SAFETY AUDIT REPORT & ZERO-TRACE DATA PURGE                     */
-/* ======================================================================= */
+/* ===================================================================== */
+/* 7. SAFETY AUDIT REPORT & ZERO-TRACE PRIVACY PURGE                     */
+/* ===================================================================== */
 function openSafetyReport(isPostRide = false) {
   const elapsedSec = rideStartTime ? Math.max(1, Math.round((Date.now() - rideStartTime) / 1000)) : 0;
   const mins = String(Math.floor(elapsedSec / 60)).padStart(2, "0");
   const secs = String(elapsedSec % 60).padStart(2, "0");
-  const avgSpeed = speedSamples.length
-    ? Math.round(speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length)
-    : 0;
+  const avgSpeed = speedSamples.length ? Math.round(speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length) : 0;
   const finalScore = evaluateRiskAnalytics();
-  const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
+  const nearestPs = currentCoords ? getNearestPolice(currentCoords.lat, currentCoords.lng) : { name: "Sulur Police Station", phone: "0422-2687233" };
 
   document.getElementById("reportSubtitle").innerText = isPostRide
     ? "Trip completed safely — all temporary telemetry & OCR data purged from memory."
-    : "Real-time Coimbatore journey telemetry & AI risk pattern summary";
-
+    : "Real-time road telemetry & AI risk pattern summary";
   document.getElementById("repDist").innerText = `${totalDistanceKm.toFixed(2)} km`;
   document.getElementById("repDur").innerText = `${mins}:${secs}`;
   document.getElementById("repSpeed").innerText = `${avgSpeed} / ${maxSpeedKmh} km/h`;
   document.getElementById("repScore").innerText = `${finalScore} / 100`;
 
-  const summary =
-    `🛡️ RIDEGUARD AI — SAFETY AUDIT REPORT (COIMBATORE)\n` +
+  document.getElementById("reportTextBox").innerText =
+    `🛡️ RIDEGUARD AI — SAFETY AUDIT REPORT\n` +
     `Rider: ${activeProfile?.name || "Rider"}\n` +
     `Vehicle: ${document.getElementById("vehicleNumber").value || "Not Scanned"} | Driver: ${document.getElementById("driverName").value || "Not Scanned"}\n` +
-    `Distance: ${totalDistanceKm.toFixed(2)} km | Duration: ${mins}:${secs}\n` +
+    `Trip Distance: ${totalDistanceKm.toFixed(2)} km | Duration: ${mins}:${secs}\n` +
     `Avg / Max Speed: ${avgSpeed} / ${maxSpeedKmh} km/h\n` +
     `Safety Score: ${finalScore}/100 | Alerts Triggered: ${alertsTriggeredCount}\n` +
-    `Nearest Police Corridor (Ref): ${nearestPs.name} (${nearestPs.phone} • ${nearestPs.distKm.toFixed(1)} km)\n` +
+    `Coimbatore Dist. Police Info: ${nearestPs.name} • Ref Tel: ${nearestPs.phone}\n` +
     `Privacy Status: ${isPostRide ? "PURGED (Zero-Retention)" : "ACTIVE ENCRYPTED"}`;
-
-  document.getElementById("reportTextBox").innerText = summary;
   document.getElementById("reportModal").classList.remove("hidden");
 }
 
-function closeReportModal() {
-  document.getElementById("reportModal").classList.add("hidden");
-}
+function closeReportModal() { document.getElementById("reportModal").classList.add("hidden"); }
 
 function copySafetyReport() {
-  const text = document.getElementById("reportTextBox").innerText;
-  copyTextFallback(text);
+  copyTextFallback(document.getElementById("reportTextBox").innerText);
   showToast("📋 Safety Audit Report copied to clipboard!");
 }
 
@@ -1367,7 +1642,6 @@ function endRideSafely() {
   }
 
   openSafetyReport(true);
-
   isRideActive = false;
   isPhonePoweredOff = false;
   activeSafetyAlertType = null;
@@ -1379,22 +1653,16 @@ function endRideSafely() {
   totalDistanceKm = 0;
   rideStartTime = null;
 
-  try {
-    localStorage.removeItem(ACTIVE_RIDE_SNAPSHOT_KEY);
-  } catch (e) {}
-
-  if (shutdownPinMarker && map) {
-    map.removeLayer(shutdownPinMarker);
-    shutdownPinMarker = null;
-  }
+  try { localStorage.removeItem(ACTIVE_RIDE_SNAPSHOT_KEY); } catch (e) {}
+  if (shutdownPinMarker && map) { map.removeLayer(shutdownPinMarker); shutdownPinMarker = null; }
   if (liveTrailLine) liveTrailLine.setLatLngs([]);
-  if (policeVectorLine) policeVectorLine.setLatLngs([]);
-
-  const box = document.getElementById("vaultSyncBox");
-  if (box) box.classList.remove("frozen");
+  document.getElementById("vaultSyncBox")?.classList.remove("frozen");
   document.getElementById("driverName").value = "";
   document.getElementById("vehicleNumber").value = "";
+  const fileInput = document.getElementById("screenshotInput");
+  if (fileInput) fileInput.value = "";
   document.getElementById("imageQualityBadge").innerText = "Awaiting Scan";
+  document.getElementById("ocrLocationBadge")?.classList.add("hidden");
   document.getElementById("ocrStatus").innerText = "Waiting for booking screenshot...";
   document.getElementById("ocrStatus").classList.remove("success");
   document.getElementById("ocrPreview").innerHTML = "<strong>Upload Rapido / Uber / Ola Screenshot</strong><br/>Click to browse or tap <em>Load Sample</em>";
@@ -1411,6 +1679,7 @@ function endRideSafely() {
 
 function showToast(msg) {
   const t = document.getElementById("toast");
+  if (!t) return;
   t.innerText = msg;
   t.classList.remove("hidden");
   setTimeout(() => t.classList.add("hidden"), 3500);
