@@ -79,6 +79,64 @@ const stationRouteMetricsMap = new Map();
 let currentRoadMetrics = { roadKm: 3.78, durationMins: 7, coords: [], source: "ESTIMATE" };
 
 /* ===================================================================== */
+/* 0. VEHICLE NUMBER PLATE AUTO-SYNC HELPER                             */
+/* ===================================================================== */
+function getCurrentVehiclePlate() {
+  const el = document.getElementById("vehicleNumber");
+  const raw = (el?.value || "").trim().toUpperCase();
+  if (raw) return raw;
+  if (typeof verifiedBookingPlate !== "undefined" && verifiedBookingPlate) {
+    return String(verifiedBookingPlate).trim().toUpperCase();
+  }
+  return "TN-38-AB-1234";
+}
+
+function syncVehiclePlate(plateValue = null, options = {}) {
+  const { silent = false } = options;
+  const el = document.getElementById("vehicleNumber");
+  let normalized = "";
+
+  if (typeof plateValue === "string") {
+    normalized = plateValue.trim().toUpperCase();
+    if (el && el.value !== normalized) {
+      el.value = normalized;
+    }
+  } else if (el) {
+    normalized = el.value.trim().toUpperCase();
+    if (el.value !== normalized) {
+      el.value = normalized;
+    }
+  }
+
+  if (normalized && typeof verifiedBookingPlate !== "undefined" && !verifiedBookingPlate) {
+    verifiedBookingPlate = normalized;
+  }
+
+  if (typeof validatePlateAgainstBooking === "function") {
+    validatePlateAgainstBooking();
+  }
+
+  if (!silent) {
+    syncShadowVaultSnapshot();
+    evaluateRiskAnalytics();
+  }
+  return normalized || getCurrentVehiclePlate();
+}
+
+function bindVehiclePlateAutoSync() {
+  const plateInput = document.getElementById("vehicleNumber");
+  if (!plateInput || plateInput.dataset.plateSyncBound === "true") return;
+  plateInput.dataset.plateSyncBound = "true";
+
+  const onPlateUpdate = () => {
+    syncVehiclePlate(undefined, { silent: false });
+  };
+  plateInput.addEventListener("input", onPlateUpdate);
+  plateInput.addEventListener("change", onPlateUpdate);
+  plateInput.addEventListener("blur", onPlateUpdate);
+}
+
+/* ===================================================================== */
 /* 1. ENCRYPTED VAULT & SESSION HELPERS                                  */
 /* ===================================================================== */
 function generateSessionToken() {
@@ -183,6 +241,7 @@ function createEndpointPinIcon(type = "start") {
 window.onload = () => {
   initBattery();
   loadOfflineQueue();
+  bindVehiclePlateAutoSync();
   window.addEventListener("online", handleNetworkStateChange);
   window.addEventListener("offline", handleNetworkStateChange);
   window.addEventListener("pagehide", dispatchLastGaspShutdownBeacon);
@@ -540,6 +599,7 @@ async function quickDemoLogin() {
 
 function showDashboard(profile) {
   activeProfile = profile;
+  bindVehiclePlateAutoSync();
   const startLat = Array.isArray(profile.coords) ? profile.coords[0] : (currentCoords?.lat || 11.0168);
   const startLng = Array.isArray(profile.coords) ? profile.coords[1] : (currentCoords?.lng || 76.9674);
 
@@ -1328,8 +1388,9 @@ function recordJourneyWaypoint(lat, lng, speedKmh, label, stationName) {
 
 function shareLiveLocation() {
   if (!currentCoords) return;
+  syncVehiclePlate(undefined, { silent: true });
   const driver = document.getElementById("driverName").value || "Not Scanned";
-  const vehicle = document.getElementById("vehicleNumber").value || "TN-38-AB-1234";
+  const vehicle = getCurrentVehiclePlate();
   const nearestPs = getNearestPolice(currentCoords.lat, currentCoords.lng);
   const mapsUrl = `https://maps.google.com/?q=${currentCoords.lat.toFixed(6)},${currentCoords.lng.toFixed(6)}`;
   const shareText = `🛡️ RideGuard AI Live Trip Share\nRider: ${activeProfile?.name || "Rider"}\nDriver: ${driver} | Vehicle: ${vehicle}\nLocation: ${currentAddress}\nHeading: ${getCardinalHeading(currentHeadingDeg)}\nCoimbatore Dist. Police (Info Only): ${nearestPs.name} (${currentRoadMetrics.roadKm.toFixed(2)} km road) • Tel: ${nearestPs.phone}\nTrack Live Pin: ${mapsUrl}`;
@@ -1345,6 +1406,8 @@ function shareLiveLocation() {
 
 function startSafeRide() {
   if (!currentCoords) return showToast("Please set your starting location first.");
+  bindVehiclePlateAutoSync();
+  syncVehiclePlate(undefined, { silent: true });
   isRideActive = true;
   isPhonePoweredOff = false;
   rideStartTime = Date.now();
@@ -1440,6 +1503,7 @@ function startSafeRide() {
 
 async function updatePosition(lat, lng, accuracy = 15, speedKmh = 0, heading = null, silentInit = false) {
   if (isPhonePoweredOff) return;
+  syncVehiclePlate(undefined, { silent: true });
 
   if (liveTrailCoords.length > 0 && !silentInit) {
     const prev = liveTrailCoords[liveTrailCoords.length - 1];
@@ -1521,7 +1585,7 @@ function syncShadowVaultSnapshot() {
     timestamp: nowTime,
     isoTime: new Date().toISOString(),
     driver: document.getElementById("driverName")?.value || "Not Scanned",
-    vehicle: document.getElementById("vehicleNumber")?.value || "TN-38-AB-1234",
+    vehicle: getCurrentVehiclePlate(),
     policeName: nearestPs.name,
     policePhone: nearestPs.phone,
     policeRoadKm: currentRoadMetrics.roadKm
@@ -1668,7 +1732,7 @@ function sendHeartbeat() {
     heading_deg: currentHeadingDeg,
     battery: currentBattery,
     driver: document.getElementById("driverName").value || "Not Scanned",
-    vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234",
+    vehicle: getCurrentVehiclePlate(),
     nearest_police_ref: `${police.name} (${police.phone} • Coimbatore Dist. Info Only)`
   };
   if (!isNetworkOnline()) return enqueueOfflinePacket("HEARTBEAT", packet);
@@ -1744,6 +1808,7 @@ function testSwitchOff(isCriticalBattery = false) {
 
 async function triggerManualSOS(reason, shutdownVault = null) {
   if (!activeProfile) return;
+  syncVehiclePlate(undefined, { silent: true });
   alertsTriggeredCount++;
   const locData = shutdownVault || {
     lat: currentCoords.lat,
@@ -1754,7 +1819,7 @@ async function triggerManualSOS(reason, shutdownVault = null) {
     address: currentAddress,
     timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
     driver: document.getElementById("driverName").value || "Not Scanned",
-    vehicle: document.getElementById("vehicleNumber").value || "TN-38-AB-1234"
+    vehicle: getCurrentVehiclePlate()
   };
 
   const police = getNearestPolice(locData.lat, locData.lng);
@@ -1929,6 +1994,8 @@ function endRideSafely() {
   if (tripOutlineInner) tripOutlineInner.setLatLngs([]);
   if (liveTrailLine) liveTrailLine.setLatLngs([]);
 
+ 
+  
   document.getElementById("vaultSyncBox")?.classList.remove("frozen");
   document.getElementById("driverName").value = "";
   document.getElementById("vehicleNumber").value = "";
